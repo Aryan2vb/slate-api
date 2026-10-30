@@ -1,0 +1,13 @@
+# Local Postgres for development and DB tests. The app itself runs with `make dev`.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: slate
+      POSTGRES_PASSWORD: slate
+      POSTGRES_DB: slate
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U slate"]
+      interval: 2s
+      retries: 20
