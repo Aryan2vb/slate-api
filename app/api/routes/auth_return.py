@@ -13,7 +13,7 @@ import json
 import re
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 
 router = APIRouter(tags=["auth"])
@@ -21,10 +21,19 @@ router = APIRouter(tags=["auth"])
 # App links only (no web targets), and only ordinary URL characters.
 APP_LINK = re.compile(r"^(slate|exp)://[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]*$")
 FORWARDED_PARAMS = ("code", "error", "error_code", "error_description")
+# Android Chrome will not open a custom-scheme link, even on tap, but always honours an intent:// link naming the
+# app's package. exp:// belongs to Expo Go during development; slate:// to the Slate app.
+ANDROID_PACKAGES = {"exp": "host.exp.exponent", "slate": "com.aryansoni.slate"}
+
+
+def android_intent(link: str) -> str:
+    scheme, rest = link.split("://", 1)
+    return f"intent://{rest}#Intent;scheme={scheme};package={ANDROID_PACKAGES[scheme]};end"
 
 
 @router.get("/auth/return", response_class=HTMLResponse, include_in_schema=False)
 async def auth_return(
+    request: Request,
     to: str = Query(max_length=500),
     code: str | None = Query(default=None, max_length=500),
     error: str | None = Query(default=None, max_length=200),
@@ -36,6 +45,8 @@ async def auth_return(
     values = dict(zip(FORWARDED_PARAMS, (code, error, error_code, error_description), strict=True))
     params = {k: v for k, v in values.items() if v}
     target = f"{to}{'&' if '?' in to else '?'}{urlencode(params)}" if params else to
+    if "Android" in request.headers.get("user-agent", ""):
+        target = android_intent(target)
     message = "Sign-in failed. Return to Slate to try again." if error else "You're signed in."
     return HTMLResponse(_page(target, message), headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
