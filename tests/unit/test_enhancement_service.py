@@ -59,7 +59,8 @@ def test_restores_user_lines_the_model_dropped_or_reworded_in_order() -> None:
 
     restored = result.sections[-1]
     assert restored.heading == RESTORED_SECTION
-    assert [(b.source, b.text) for b in restored.blocks] == [("user", "prices up"), ("user", "ship by friday")]
+    # Restored exactly as typed (verbatim), not as the whitespace-normalised form used for matching.
+    assert [(b.source, b.text) for b in restored.blocks] == [("user", "prices  up "), ("user", "ship by friday")]
     # The reworded "user" block was model text: with no evidence it is dropped, leaving no empty section behind.
     assert [s.heading for s in result.sections] == [RESTORED_SECTION]
 
@@ -107,3 +108,16 @@ async def test_service_saves_grounded_notes_and_marks_ready() -> None:
     system, prompt = llm.prompts[0]
     assert "exactly as written" in system
     assert "[01:05] pricing" in prompt and "sales call" in prompt
+
+
+def test_user_block_text_is_rebuilt_from_the_original_line() -> None:
+    # Seen live with gpt-oss-120b: the model echoed the prompt's "[mm:ss]" prefix into the user's block.
+    lines = [_line(0, "Pro price -> $15?", t_ms=9000), _line(1, "Marcus:  billing + email", t_ms=24000)]
+    notes = _notes(
+        NoteBlock(source="user", text="[00:09] Pro price -> $15?"),
+        NoteBlock(source="user", text="[00:24] Marcus: billing + email — he owns it"),
+    )
+    grounded = ground_notes(notes, lines, SEGMENTS)
+    user_texts = [b.text for s in grounded.sections for b in s.blocks if b.source == "user"]
+    assert user_texts == ["Pro price -> $15?", "Marcus:  billing + email"]
+    assert all(s.heading != RESTORED_SECTION for s in grounded.sections)

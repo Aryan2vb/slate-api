@@ -46,13 +46,19 @@ def ground_notes(
 ) -> EnhancedNotes:
     """Returns notes where every user line is present verbatim and every AI block cites real transcript time.
 
+    - A "user" block's text is rebuilt from the user's original lines it contains, so anything the model added
+      around them (timestamps it echoed from the prompt, rewording) never reaches the user as their own words.
     - "user" blocks that contain none of the user's lines are model text mislabelled as the user's: they are
       treated as "ai" blocks and must carry evidence like any other.
     - Evidence outside [0, end of transcript] is removed; AI blocks left without evidence are dropped.
     - User lines the model dropped are restored under a trailing "Your notes" section, in their original order.
     """
     end_bound = max((s.end_ms for s in segments), default=None)
-    wanted = [_norm(line.text) for line in sorted(user_lines, key=lambda n: n.position) if _norm(line.text)]
+    originals: dict[str, str] = {}
+    for line in sorted(user_lines, key=lambda n: n.position):
+        if _norm(line.text):
+            originals.setdefault(_norm(line.text), line.text)
+    wanted = list(originals)
 
     sections: list[Section] = []
     present: set[str] = set()
@@ -65,7 +71,8 @@ def ground_notes(
             owned = [w for w in wanted if w in text]
             if block.source == "user" and owned:
                 present.update(owned)
-                blocks.append(block.model_copy(update={"evidence": evidence}))
+                verbatim = "\n".join(originals[w] for w in owned)
+                blocks.append(block.model_copy(update={"text": verbatim, "evidence": evidence}))
             elif evidence:
                 blocks.append(block.model_copy(update={"source": "ai", "evidence": evidence}))
             else:
@@ -73,9 +80,10 @@ def ground_notes(
         if blocks:
             sections.append(section.model_copy(update={"blocks": blocks}))
 
-    missing = [w for w in dict.fromkeys(wanted) if w not in present]
+    missing = [w for w in wanted if w not in present]
     if missing:
-        sections.append(Section(heading=RESTORED_SECTION, blocks=[NoteBlock(source="user", text=w) for w in missing]))
+        restored = [NoteBlock(source="user", text=originals[w]) for w in missing]
+        sections.append(Section(heading=RESTORED_SECTION, blocks=restored))
 
     action_items = [
         item.model_copy(update={"evidence": _valid_evidence(item.evidence, end_bound)}) for item in notes.action_items
