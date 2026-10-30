@@ -305,7 +305,7 @@ class FakeStorage:
         self.objects: dict[str, bytes] = {}
         self.deleted: list[str] = []
 
-    async def create_upload_url(self, path: str) -> SignedUpload:
+    async def create_upload_url(self, path: str, *, overwrite: bool = False) -> SignedUpload:
         return SignedUpload(url=f"https://storage.test/upload/{path}", path=path, expires_in_s=900)
 
     async def download(self, path: str) -> bytes:

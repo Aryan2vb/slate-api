@@ -92,3 +92,12 @@ async def test_path_is_url_encoded() -> None:
     route = respx.get(f"{API}/object/meeting-audio/u1/my%20file.m4a").respond(content=b"ok")
     await _storage().download("u1/my file.m4a")
     assert route.called
+
+
+@respx.mock
+async def test_overwrite_upload_url_asks_storage_to_upsert() -> None:
+    route = respx.post(f"{BASE}/storage/v1/object/upload/sign/meeting-audio/p.m4a").mock(
+        return_value=httpx.Response(200, json={"url": "/object/upload/sign/meeting-audio/p.m4a?token=t"})
+    )
+    await _storage().create_upload_url("p.m4a", overwrite=True)
+    assert route.calls.last.request.headers["x-upsert"] == "true"

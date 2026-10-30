@@ -51,8 +51,14 @@ class UploadService:
             meeting = await require_meeting(uow, user_id=user_id, meeting_id=meeting_id)
             if meeting.status not in (MeetingStatus.DRAFT, MeetingStatus.RECORDING):
                 raise ConflictError("Meeting is no longer accepting audio")
-            if any(c.seq == seq for c in await uow.chunks.list(meeting_id=meeting_id)):
-                raise ConflictError(f"Chunk {seq} already exists")
+            existing = next((c for c in await uow.chunks.list(meeting_id=meeting_id) if c.seq == seq), None)
+            if existing is not None:
+                # A client retrying an upload (lost network, expired URL) gets a fresh URL for the same chunk.
+                # Overwrite is allowed because an earlier attempt may have stored the object before failing.
+                if existing.status != ChunkStatus.PENDING:
+                    raise ConflictError(f"Chunk {seq} is already uploaded")
+                upload = await self._storage.create_upload_url(existing.storage_path, overwrite=True)
+                return ChunkUpload(chunk=existing, upload=upload)
             path = chunk_path(user_id, meeting_id, seq)
             upload = await self._storage.create_upload_url(path)
             chunk = await uow.chunks.add(

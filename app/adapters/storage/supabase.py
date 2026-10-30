@@ -41,8 +41,9 @@ class SupabaseStorage:
             upload_url_ttl_s=settings.upload_url_ttl_s,
         )
 
-    async def create_upload_url(self, path: str) -> SignedUpload:
-        response = await self._request("POST", f"/object/upload/sign/{self._bucket}/{_quote(path)}")
+    async def create_upload_url(self, path: str, *, overwrite: bool = False) -> SignedUpload:
+        extra = {"x-upsert": "true"} if overwrite else None
+        response = await self._request("POST", f"/object/upload/sign/{self._bucket}/{_quote(path)}", headers=extra)
         relative = response.json().get("url")
         if not isinstance(relative, str) or "token=" not in relative:
             raise ProviderError(_PROVIDER, "signed upload response had no url", retryable=True)
@@ -57,10 +58,18 @@ class SupabaseStorage:
             await self._request("DELETE", f"/object/{self._bucket}", json={"prefixes": list(paths)})
 
     async def _request(
-        self, method: str, url: str, *, json: object = None, missing: str | None = None
+        self,
+        method: str,
+        url: str,
+        *,
+        json: object = None,
+        missing: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         try:
-            response = await self._client.request(method, self._base + url, headers=self._headers, json=json)
+            response = await self._client.request(
+                method, self._base + url, headers={**self._headers, **(headers or {})}, json=json
+            )
         except httpx.TimeoutException as e:
             raise ProviderError(_PROVIDER, f"{method} timed out", retryable=True) from e
         except httpx.HTTPError as e:

@@ -49,12 +49,30 @@ def test_finish_without_uploaded_chunk_is_409() -> None:
         assert c.post(f"/meetings/{m['id']}/finish", headers=auth(ALICE)).status_code == 409
 
 
-def test_rejects_bad_mime_size_and_duplicate_seq() -> None:
+def test_rejects_bad_mime_and_size() -> None:
     with client() as (c, _):
         m = create_meeting(c, ALICE)
         assert _start(c, ALICE, m["id"], mime="video/mp4").status_code == 422
         assert _start(c, ALICE, m["id"], size=51 * 1024 * 1024).status_code == 422
         assert _start(c, ALICE, m["id"], mime="audio/mp4; codecs=mp4a").status_code == 201
+
+
+def test_retrying_a_pending_chunk_returns_it_with_a_fresh_url() -> None:
+    # Phones retry after lost connections or expired signed URLs; that must not create a second chunk.
+    with client() as (c, _):
+        m = create_meeting(c, ALICE)
+        first = _start(c, ALICE, m["id"]).json()
+        again = _start(c, ALICE, m["id"])
+        assert again.status_code == 201
+        assert again.json()["chunk_id"] == first["chunk_id"]
+        assert again.json()["upload"]["path"] == first["upload"]["path"]
+
+
+def test_an_uploaded_chunk_cannot_be_registered_again() -> None:
+    with client() as (c, _):
+        m = create_meeting(c, ALICE)
+        chunk = _start(c, ALICE, m["id"]).json()
+        c.post(f"/meetings/{m['id']}/chunks/{chunk['chunk_id']}/uploaded", headers=auth(ALICE))
         assert _start(c, ALICE, m["id"]).status_code == 409
 
 
