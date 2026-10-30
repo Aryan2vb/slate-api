@@ -82,6 +82,7 @@ class MeetingOut(_Out):
     status: MeetingStatus
     calendar_event_id: str | None
     attendees: list[AttendeeOut]
+    languages: list[str]
     started_at: datetime | None
     created_at: datetime
     updated_at: datetime

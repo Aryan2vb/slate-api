@@ -58,6 +58,7 @@ class Meeting(_Model):
     status: MeetingStatus = MeetingStatus.DRAFT
     calendar_event_id: str | None = None
     attendees: list[Attendee] = Field(default_factory=list)
+    languages: list[str] = Field(default_factory=list)  # detected from the recording; empty until transcribed
     started_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
@@ -104,6 +105,7 @@ class TranscriptSegment(_Model):
 class Transcript(_Model):
     segments: list[TranscriptSegment]
     language: str | None = None
+    languages: list[str] = Field(default_factory=list)  # BCP-47, most prominent first; empty when unknown
     duration_ms: int | None = None
     provider: str
 

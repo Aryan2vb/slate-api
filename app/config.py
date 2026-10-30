@@ -23,6 +23,9 @@ class Settings(BaseSettings):
 
     stt_provider: Literal["deepgram", "groq", "fake"] = "deepgram"
     deepgram_api_key: SecretStr = SecretStr("")
+    # "multi" auto-handles ~55 languages including mid-sentence switching (Hindi + English). A BCP-47 code such
+    # as "en" pins one language. Deepgram's own default is English-only, which returns nothing for Hindi speech.
+    stt_language: str = "multi"
     groq_api_key: SecretStr = SecretStr("")
 
     llm_provider: Literal["groq", "anthropic", "openai-compatible", "fake"] = "groq"

@@ -99,6 +99,10 @@ class _Meetings:
         m = self.s.meetings[meeting_id]
         self.s.meetings[meeting_id] = m.model_copy(update={"status": status, "updated_at": _now()})
 
+    async def set_languages(self, *, meeting_id: UUID, languages: Sequence[str]) -> None:
+        m = self.s.meetings[meeting_id]
+        self.s.meetings[meeting_id] = m.model_copy(update={"languages": list(languages), "updated_at": _now()})
+
     async def delete(self, *, user_id: UUID, meeting_id: UUID) -> bool:
         if await self.get(user_id=user_id, meeting_id=meeting_id) is None:
             return False

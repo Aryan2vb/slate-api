@@ -70,6 +70,28 @@ def _flush(c: dict[str, Any]) -> TranscriptSegment:
     )
 
 
+def _languages(results: dict[str, Any]) -> list[str]:
+    """Spoken languages, most prominent first.
+
+    Multilingual mode reports `languages` on the alternative and a `language` on every word; detection mode reports
+    `detected_language` on the channel. Word counts order them; Hinglish comes back as "hi" with English words kept.
+    """
+    channels = results.get("channels") or []
+    if not channels:
+        return []
+    alternatives = channels[0].get("alternatives") or []
+    alt = alternatives[0] if alternatives else {}
+    counts: dict[str, int] = {}
+    for w in alt.get("words") or []:
+        if code := w.get("language"):
+            counts[code] = counts.get(code, 0) + 1
+    ordered = sorted(counts, key=lambda c: -counts[c])
+    for code in [*(alt.get("languages") or []), channels[0].get("detected_language")]:
+        if code and code not in ordered:
+            ordered.append(code)
+    return ordered
+
+
 def parse_response(body: dict[str, Any], provider: str) -> Transcript:
     results = body.get("results") or {}
     utterances = results.get("utterances")
@@ -81,12 +103,11 @@ def parse_response(body: dict[str, Any], provider: str) -> Transcript:
         segments = _segments_from_words(alternatives[0].get("words") or []) if alternatives else []
     metadata = body.get("metadata") or {}
     duration = metadata.get("duration")
-    language = None
-    if channels := results.get("channels"):
-        language = channels[0].get("detected_language")
+    languages = _languages(results)
     return Transcript(
         segments=segments,
-        language=language,
+        language=languages[0] if languages else None,
+        languages=languages,
         duration_ms=_ms(duration) if duration is not None else None,
         provider=provider,
     )
@@ -95,11 +116,19 @@ def parse_response(body: dict[str, Any], provider: str) -> Transcript:
 class DeepgramSpeechToText:
     name = "deepgram"
 
-    def __init__(self, api_key: str, *, model: str = "nova-3", client: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        model: str = "nova-3",
+        language: str | None = "multi",
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
         if not api_key:
             raise ValueError("DEEPGRAM_API_KEY is required for the deepgram STT provider")
         self._api_key = api_key
         self._model = model
+        self._language = language
         # Up to an hour of audio: upload plus processing can take minutes.
         self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=10.0))
 
@@ -113,8 +142,9 @@ class DeepgramSpeechToText:
                 "diarize": "true" if options.diarize else "false",
             }
         )
-        if options.language:
-            params = params.set("language", options.language)
+        # A per-request language wins; otherwise the configured mode ("multi" detects and code-switches).
+        if language := options.language or self._language:
+            params = params.set("language", language)
         for term in normalize_keyterms(options.keyterms):
             params = params.add("keyterm", term)
         return params

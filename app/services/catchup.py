@@ -46,7 +46,7 @@ class CatchupService:
 
         result = await self._llm.generate(
             system=CATCHUP_SYSTEM,
-            prompt=catchup_prompt(title=meeting.title, minutes=minutes, excerpt=excerpt),
+            prompt=catchup_prompt(title=meeting.title, minutes=minutes, excerpt=excerpt, languages=meeting.languages),
             schema=CatchUp,
             max_tokens=1000,
         )

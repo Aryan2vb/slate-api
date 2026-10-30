@@ -88,10 +88,12 @@ class TranscriptionService:
             provider=transcript.provider,
             segments=len(transcript.segments),
             chunks=len(chunks),
+            languages=transcript.languages,
         )
 
         async with self._uow() as uow:
             await uow.transcripts.replace(meeting_id=meeting_id, segments=transcript.segments)
+            await uow.meetings.set_languages(meeting_id=meeting_id, languages=transcript.languages)
             await uow.commit()
 
         # Audio is deleted only once the transcript is durably saved. A failed delete leaves orphaned objects,

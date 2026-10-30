@@ -115,6 +115,7 @@ class EnhancementService:
                 attendees=format_attendees(meeting.attendees),
                 notes=format_notes(lines),
                 transcript=format_transcript(segments, names) or "(no transcript)",
+                languages=meeting.languages,
             ),
             schema=EnhancedNotes,
             max_tokens=12_000,

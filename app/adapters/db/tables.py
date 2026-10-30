@@ -59,6 +59,7 @@ class MeetingRow(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft")
     calendar_event_id: Mapped[str | None] = mapped_column(String(256))
     attendees: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    languages: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = _updated()

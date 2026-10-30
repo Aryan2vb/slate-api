@@ -7,7 +7,7 @@ def build_speech_to_text(settings: Settings) -> SpeechToText:
         case "deepgram":
             from app.adapters.stt.deepgram import DeepgramSpeechToText
 
-            return DeepgramSpeechToText(settings.deepgram_api_key.get_secret_value())
+            return DeepgramSpeechToText(settings.deepgram_api_key.get_secret_value(), language=settings.stt_language)
         case "groq":
             from app.adapters.stt.groq_whisper import GroqWhisperSpeechToText
 

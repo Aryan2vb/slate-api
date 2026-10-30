@@ -29,6 +29,44 @@ def format_notes(lines: Sequence[NoteLine]) -> str:
     )
 
 
+LANGUAGE_NAMES = {
+    "en": "English",
+    "hi": "Hindi",
+    "mr": "Marathi",
+    "bn": "Bengali",
+    "ta": "Tamil",
+    "te": "Telugu",
+    "gu": "Gujarati",
+    "kn": "Kannada",
+    "ml": "Malayalam",
+    "pa": "Punjabi",
+    "ur": "Urdu",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "pt": "Portuguese",
+    "it": "Italian",
+    "nl": "Dutch",
+    "ru": "Russian",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "zh": "Chinese",
+    "ar": "Arabic",
+}
+
+
+def language_rule(languages: Sequence[str]) -> str:
+    """Tells the model which language to write in: the one the meeting was held in, mixed the way it was spoken."""
+    named = [LANGUAGE_NAMES.get(code.split("-")[0], code) for code in languages]
+    detected = f"Speech recognition detected: {', '.join(named)}." if named else ""
+    return (
+        f"{detected} Write every field you generate in the language the participants actually spoke, as it "
+        "appears in the transcript. If they mixed languages (for example Hindi with English words, often called "
+        "Hinglish), mix them the same way and keep each word in the script the transcript uses. Do not translate "
+        "to English unless the meeting was in English. Names, numbers, dates and product terms stay as spoken."
+    ).strip()
+
+
 def format_attendees(attendees: Sequence[Attendee]) -> str:
     rows = [f"- {a.name or '(no name)'} <{a.email or 'no email'}>" for a in attendees]
     return "\n".join(rows) or "(no attendee list)"
@@ -71,10 +109,14 @@ ranges (start_ms/end_ms) copied from the transcript lines it is based on.
 6. The tldr is two sentences at most."""
 
 
-def enhance_prompt(*, title: str, template: TemplateKind, attendees: str, notes: str, transcript: str) -> str:
+def enhance_prompt(
+    *, title: str, template: TemplateKind, attendees: str, notes: str, transcript: str, languages: Sequence[str] = ()
+) -> str:
     return f"""\
 Meeting: {title}
 Type guidance: {TEMPLATE_GUIDANCE[template]}
+Language: {language_rule(languages)} The person's own lines are always kept exactly as written, in whatever \
+language they used.
 
 Attendees:
 {attendees}
@@ -117,9 +159,10 @@ Someone just lost focus in a live meeting and asks "what did I miss?". Summarise
 short sentence of summary and at most five points, most important first. Use only what the excerpt says."""
 
 
-def catchup_prompt(*, title: str, minutes: int, excerpt: str) -> str:
+def catchup_prompt(*, title: str, minutes: int, excerpt: str, languages: Sequence[str] = ()) -> str:
     return f"""\
 Meeting: {title}
+Language: {language_rule(languages)}
 The last {minutes} minutes:
 <excerpt>
 {excerpt}

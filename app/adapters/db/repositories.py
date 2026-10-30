@@ -90,6 +90,9 @@ class SqlMeetingRepository:
     async def set_status(self, *, meeting_id: UUID, status: MeetingStatus) -> None:
         await self._s.execute(update(MeetingRow).where(MeetingRow.id == meeting_id).values(status=status.value))
 
+    async def set_languages(self, *, meeting_id: UUID, languages: Sequence[str]) -> None:
+        await self._s.execute(update(MeetingRow).where(MeetingRow.id == meeting_id).values(languages=list(languages)))
+
     async def delete(self, *, user_id: UUID, meeting_id: UUID) -> bool:
         result = await self._s.execute(
             delete(MeetingRow).where(MeetingRow.id == meeting_id, MeetingRow.user_id == user_id)
