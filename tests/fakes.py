@@ -82,6 +82,12 @@ class _Meetings:
         m = self.s.meetings.get(meeting_id)
         return m if m and m.user_id == user_id else None
 
+    async def get_by_calendar_event(self, *, user_id: UUID, calendar_event_id: str) -> Meeting | None:
+        return next(
+            (m for m in self.s.meetings.values() if m.user_id == user_id and m.calendar_event_id == calendar_event_id),
+            None,
+        )
+
     async def list(self, *, user_id: UUID, limit: int, before: datetime | None) -> list[Meeting]:
         rows = [
             m for m in self.s.meetings.values() if m.user_id == user_id and (before is None or m.created_at < before)

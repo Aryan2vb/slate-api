@@ -25,8 +25,11 @@ class Settings(BaseSettings):
     deepgram_api_key: SecretStr = SecretStr("")
     groq_api_key: SecretStr = SecretStr("")
 
-    llm_provider: Literal["groq", "anthropic", "fake"] = "groq"
+    llm_provider: Literal["groq", "anthropic", "openai-compatible", "fake"] = "groq"
     llm_model: str | None = None  # provider default when unset
+    # openai-compatible only (OpenAI, OpenRouter, Together, Ollama...): endpoint and its key.
+    llm_base_url: str | None = None
+    llm_api_key: SecretStr = SecretStr("")
     anthropic_api_key: SecretStr = SecretStr("")
 
     run_worker_in_process: bool = True

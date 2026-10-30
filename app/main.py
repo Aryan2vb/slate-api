@@ -5,9 +5,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.errors import install_error_handlers
-from app.api.routes import health
+from app.api.routes import health, meetings, notes, processing, uploads
 from app.config import get_settings
 from app.container import Container, build_container
+from app.jobs.runner import start_worker, stop_worker
 from app.logging import configure_logging
 
 
@@ -19,8 +20,13 @@ def create_app(container: Container | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.container = container or build_container(settings)
-        # Workers and other background tasks are started here (see app/jobs/runner.py once it exists).
-        yield
+        # Free-tier hosting runs the job worker inside the API process; production can run `python -m app.worker`.
+        worker = start_worker(app.state.container) if settings.run_worker_in_process else None
+        try:
+            yield
+        finally:
+            if worker is not None:
+                await stop_worker(worker)
 
     app = FastAPI(title="Slate API", version="0.1.0", lifespan=lifespan)
     if settings.cors_origins:
@@ -29,4 +35,8 @@ def create_app(container: Container | None = None) -> FastAPI:
         )
     install_error_handlers(app)
     app.include_router(health.router)
+    app.include_router(meetings.router)
+    app.include_router(notes.router)
+    app.include_router(uploads.router)
+    app.include_router(processing.router)
     return app
