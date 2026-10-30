@@ -11,4 +11,5 @@ RUN useradd --create-home app && chown -R app /app
 USER app
 EXPOSE 8000
 # Same image runs the worker with: uv run python -m app.worker
-CMD ["sh", "-c", "uv run alembic upgrade head && uv run uvicorn app.main:create_app --factory --host 0.0.0.0 --port ${PORT:-8000}"]
+# The platform proxy (Render) terminates TLS; trust its X-Forwarded-* headers for client IP and scheme.
+CMD ["sh", "-c", "uv run alembic upgrade head && uv run uvicorn app.main:create_app --factory --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]

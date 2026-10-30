@@ -3,7 +3,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
 
-from app.api.deps import ContainerDep, CurrentUser
+from app.api.deps import ContainerDep, CurrentUser, rate_limit
 from app.api.schemas import ChunkOut, JobsOut, StartChunkIn, StartChunkOut
 from app.services.uploads import UploadService
 
@@ -30,6 +30,6 @@ async def chunk_uploaded(meeting_id: UUID, chunk_id: UUID, user: CurrentUser, sv
     return ChunkOut.of(await svc.mark_uploaded(user_id=user.id, meeting_id=meeting_id, chunk_id=chunk_id))
 
 
-@router.post("/finish", status_code=status.HTTP_202_ACCEPTED)
+@router.post("/finish", status_code=status.HTTP_202_ACCEPTED, dependencies=[Depends(rate_limit("processing"))])
 async def finish(meeting_id: UUID, user: CurrentUser, svc: Service) -> JobsOut:
     return JobsOut.of(await svc.finish(user_id=user.id, meeting_id=meeting_id))

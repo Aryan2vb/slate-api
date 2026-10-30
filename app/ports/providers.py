@@ -58,3 +58,9 @@ class LanguageModel(Protocol):
     async def generate[T: BaseModel](self, *, system: str, prompt: str, schema: type[T], max_tokens: int = 8000) -> T:
         """Raises ProviderError(retryable=...) on failure or when output never validates."""
         ...
+
+
+class RateLimiter(Protocol):
+    """Counts actions per key in a sliding window. Raises RateLimitedError when `limit` is already reached."""
+
+    async def hit(self, key: str, *, limit: int, window_s: int) -> None: ...

@@ -28,7 +28,16 @@ def create_app(container: Container | None = None) -> FastAPI:
             if worker is not None:
                 await stop_worker(worker)
 
-    app = FastAPI(title="Slate API", version="0.1.0", lifespan=lifespan)
+    # Interactive docs and the schema stay off in prod so the API surface is not browsable by anyone.
+    public_docs = settings.env != "prod"
+    app = FastAPI(
+        title="Slate API",
+        version="0.1.0",
+        lifespan=lifespan,
+        docs_url="/docs" if public_docs else None,
+        redoc_url="/redoc" if public_docs else None,
+        openapi_url="/openapi.json" if public_docs else None,
+    )
     if settings.cors_origins:
         app.add_middleware(
             CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"], allow_headers=["*"]

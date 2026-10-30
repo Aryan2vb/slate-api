@@ -8,7 +8,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.config import Settings
-from app.ports.providers import AudioAssembler, AuthVerifier, LanguageModel, ObjectStorage, SpeechToText
+from app.ports.providers import (
+    AudioAssembler,
+    AuthVerifier,
+    LanguageModel,
+    ObjectStorage,
+    RateLimiter,
+    SpeechToText,
+)
 from app.ports.repositories import UnitOfWorkFactory
 
 
@@ -21,6 +28,7 @@ class Container:
     stt: SpeechToText
     llm: LanguageModel
     audio: AudioAssembler
+    rate_limiter: RateLimiter
 
 
 def build_container(settings: Settings) -> Container:
@@ -29,6 +37,7 @@ def build_container(settings: Settings) -> Container:
     from app.adapters.auth.supabase import SupabaseJwtVerifier
     from app.adapters.db.uow import SqlAlchemyUnitOfWorkFactory
     from app.adapters.llm.factory import build_language_model
+    from app.adapters.ratelimit.memory import InMemoryRateLimiter
     from app.adapters.storage.supabase import SupabaseStorage
     from app.adapters.stt.factory import build_speech_to_text
 
@@ -40,4 +49,5 @@ def build_container(settings: Settings) -> Container:
         stt=build_speech_to_text(settings),
         llm=build_language_model(settings),
         audio=FfmpegAudioAssembler(),
+        rate_limiter=InMemoryRateLimiter(),
     )

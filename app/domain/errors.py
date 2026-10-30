@@ -31,3 +31,12 @@ class ProviderError(DomainError):
         super().__init__(f"{provider}: {message}")
         self.provider = provider
         self.retryable = retryable
+
+
+class RateLimitedError(DomainError):
+    """The caller exceeded a usage limit. `retry_after_s` is when the oldest counted request leaves the window."""
+
+    def __init__(self, action: str, retry_after_s: int) -> None:
+        super().__init__(f"Too many {action} requests. Try again in {retry_after_s}s.")
+        self.action = action
+        self.retry_after_s = retry_after_s

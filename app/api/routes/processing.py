@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Path, status
 from pydantic import BaseModel, Field
 
-from app.api.deps import ContainerDep, CurrentUser
+from app.api.deps import ContainerDep, CurrentUser, rate_limit
 from app.domain.errors import InvalidInputError, NotFoundError
 from app.domain.models import ChunkStatus, Job, JobKind, Speaker
 from app.services.catchup import CatchUp, CatchupService
@@ -37,7 +37,7 @@ def _speakers(c: ContainerDep) -> SpeakerService:
     return SpeakerService(c.uow, c.llm)
 
 
-@router.post("/catch-up")
+@router.post("/catch-up", dependencies=[Depends(rate_limit("catchup"))])
 async def catch_up(
     meeting_id: UUID,
     body: CatchUpRequest,
@@ -62,7 +62,7 @@ async def confirm_speaker(
     )
 
 
-@router.post("/reprocess", status_code=status.HTTP_202_ACCEPTED)
+@router.post("/reprocess", status_code=status.HTTP_202_ACCEPTED, dependencies=[Depends(rate_limit("processing"))])
 async def reprocess(meeting_id: UUID, body: ReprocessRequest, user: CurrentUser, c: ContainerDep) -> Job:
     async with c.uow() as uow:
         if await uow.meetings.get(user_id=user.id, meeting_id=meeting_id) is None:

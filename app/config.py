@@ -38,6 +38,10 @@ class Settings(BaseSettings):
 
     cors_origins: list[str] = Field(default_factory=list)
 
+    # Per-user limits on endpoints that spend provider credit (requests per rolling hour).
+    rate_limit_processing_per_hour: int = 30  # finish + reprocess (Deepgram + LLM)
+    rate_limit_catchup_per_hour: int = 60  # catch-up (LLM)
+
 
 @lru_cache
 def get_settings() -> Settings:

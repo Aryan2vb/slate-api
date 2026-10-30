@@ -12,6 +12,7 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from app.adapters.ratelimit.memory import InMemoryRateLimiter
 from app.config import Settings
 from app.container import Container
 from app.domain.errors import AuthenticationError, NotFoundError
@@ -362,5 +363,6 @@ def fake_container(**overrides: object) -> Container:
         "stt": FakeStt(),
         "llm": FakeLlm(),
         "audio": FakeAudio(),
+        "rate_limiter": InMemoryRateLimiter(),
     } | overrides
     return Container(**parts)  # type: ignore[arg-type]
