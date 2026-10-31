@@ -1,7 +1,8 @@
 from functools import lru_cache
 from typing import Literal
+from uuid import UUID
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,6 +18,11 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_jwt_audience: str = "authenticated"
     supabase_service_role_key: SecretStr = SecretStr("")
+
+    # Development only: also accept the bearer token "dev" as DEV_USER_ID, so the app can be used without signing in.
+    # Refused at startup when ENV=prod.
+    dev_auth: bool = False
+    dev_user_id: UUID = UUID("00000000-0000-4000-8000-00000000d3e7")
 
     storage_bucket: str = "meeting-audio"
     upload_url_ttl_s: int = 900
@@ -44,6 +50,12 @@ class Settings(BaseSettings):
     # Per-user limits on endpoints that spend provider credit (requests per rolling hour).
     rate_limit_processing_per_hour: int = 30  # finish + reprocess (Deepgram + LLM)
     rate_limit_catchup_per_hour: int = 60  # catch-up (LLM)
+
+    @model_validator(mode="after")
+    def _no_dev_auth_in_prod(self) -> "Settings":
+        if self.dev_auth and self.env == "prod":
+            raise ValueError("DEV_AUTH must not be enabled with ENV=prod")
+        return self
 
 
 @lru_cache

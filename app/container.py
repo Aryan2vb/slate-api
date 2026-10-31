@@ -33,6 +33,14 @@ class Container:
     handoffs: AuthHandoffs
 
 
+def _auth(settings: Settings, verifier: AuthVerifier) -> AuthVerifier:
+    if not settings.dev_auth:
+        return verifier
+    from app.adapters.auth.dev import DevAuthVerifier
+
+    return DevAuthVerifier(verifier, settings.dev_user_id)
+
+
 def build_container(settings: Settings) -> Container:
     # Imports are local so a missing optional vendor never breaks importing the app.
     from app.adapters.audio.ffmpeg import FfmpegAudioAssembler
@@ -47,7 +55,7 @@ def build_container(settings: Settings) -> Container:
     return Container(
         settings=settings,
         uow=SqlAlchemyUnitOfWorkFactory.from_url(settings.database_url),
-        auth=SupabaseJwtVerifier.from_settings(settings),
+        auth=_auth(settings, SupabaseJwtVerifier.from_settings(settings)),
         storage=SupabaseStorage.from_settings(settings),
         stt=build_speech_to_text(settings),
         llm=build_language_model(settings),
