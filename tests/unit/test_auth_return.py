@@ -43,9 +43,6 @@ def test_script_string_cannot_close_the_script_tag() -> None:
 def test_android_gets_an_intent_link_for_the_owning_app() -> None:
     android = "Mozilla/5.0 (Linux; Android 15; Pixel 8) Chrome/140 Mobile"
     expo = _get({"to": "exp://10.0.0.5:8081/--/auth-callback", "code": "abc"}, android)
-    assert (
-        'href="intent://10.0.0.5:8081/--/auth-callback?code=abc#Intent;scheme=exp;package=host.exp.exponent;end"'
-        in expo.text
-    )
+    assert 'href="intent://10.0.0.5:8081/--/auth-callback?code=abc#Intent;scheme=exp;end"' in expo.text
     app = _get({"to": "slate://auth-callback", "code": "abc"}, android)
     assert "intent://auth-callback?code=abc#Intent;scheme=slate;package=com.aryansoni.slate;end" in app.text

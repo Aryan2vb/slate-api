@@ -21,14 +21,16 @@ router = APIRouter(tags=["auth"])
 # App links only (no web targets), and only ordinary URL characters.
 APP_LINK = re.compile(r"^(slate|exp)://[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]*$")
 FORWARDED_PARAMS = ("code", "error", "error_code", "error_description")
-# Android Chrome will not open a custom-scheme link, even on tap, but always honours an intent:// link naming the
-# app's package. exp:// belongs to Expo Go during development; slate:// to the Slate app.
-ANDROID_PACKAGES = {"exp": "host.exp.exponent", "slate": "com.aryansoni.slate"}
+# Android Chrome will not open a custom-scheme link, even on tap, but honours intent:// links. slate:// names the
+# Slate app's package. Expo Go (exp://, development only) is left unnamed: with its package named, Chrome failed to
+# match Expo Go's link filters and opened the Play Store instead.
+ANDROID_PACKAGES = {"slate": "com.aryansoni.slate"}
 
 
 def android_intent(link: str) -> str:
     scheme, rest = link.split("://", 1)
-    return f"intent://{rest}#Intent;scheme={scheme};package={ANDROID_PACKAGES[scheme]};end"
+    package = f"package={ANDROID_PACKAGES[scheme]};" if scheme in ANDROID_PACKAGES else ""
+    return f"intent://{rest}#Intent;scheme={scheme};{package}end"
 
 
 @router.get("/auth/return", response_class=HTMLResponse, include_in_schema=False)
