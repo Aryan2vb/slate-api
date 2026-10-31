@@ -12,6 +12,7 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from app.adapters.handoff.memory import InMemoryAuthHandoffs
 from app.adapters.ratelimit.memory import InMemoryRateLimiter
 from app.config import Settings
 from app.container import Container
@@ -368,5 +369,6 @@ def fake_container(**overrides: object) -> Container:
         "llm": FakeLlm(),
         "audio": FakeAudio(),
         "rate_limiter": InMemoryRateLimiter(),
+        "handoffs": InMemoryAuthHandoffs(),
     } | overrides
     return Container(**parts)  # type: ignore[arg-type]

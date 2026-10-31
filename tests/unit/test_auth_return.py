@@ -46,3 +46,33 @@ def test_android_gets_an_intent_link_for_the_owning_app() -> None:
     assert 'href="intent://10.0.0.5:8081/--/auth-callback?code=abc#Intent;scheme=exp;end"' in expo.text
     app = _get({"to": "slate://auth-callback", "code": "abc"}, android)
     assert "intent://auth-callback?code=abc#Intent;scheme=slate;package=com.aryansoni.slate;end" in app.text
+
+
+HANDOFF = "h" * 40
+
+
+def test_handoff_parks_the_result_once_for_the_app_to_collect() -> None:
+    with TestClient(create_app(fake_container())) as c:
+        assert c.get(f"/auth/handoff/{HANDOFF}").status_code == 404  # nothing yet
+        page = c.get("/auth/return", params={"to": "exp://h/--/auth-callback", "handoff": HANDOFF, "code": "abc"})
+        assert "Close this tab" in page.text
+        first = c.get(f"/auth/handoff/{HANDOFF}")
+        assert first.status_code == 200 and first.json() == {"code": "abc"}
+        assert c.get(f"/auth/handoff/{HANDOFF}").status_code == 404  # one-time
+
+
+def test_handoff_ids_must_be_long_random_tokens() -> None:
+    with TestClient(create_app(fake_container())) as c:
+        assert c.get("/auth/handoff/short").status_code == 422
+        bad = c.get("/auth/return", params={"to": "exp://h/--/auth-callback", "handoff": "x", "code": "abc"})
+        assert bad.status_code == 422
+
+
+async def test_handoffs_expire() -> None:
+    from app.adapters.handoff.memory import InMemoryAuthHandoffs
+
+    now = [0.0]
+    store = InMemoryAuthHandoffs(ttl_s=300, clock=lambda: now[0])
+    await store.put(HANDOFF, {"code": "abc"})
+    now[0] = 301
+    assert await store.take(HANDOFF) is None

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from app.config import Settings
 from app.ports.providers import (
     AudioAssembler,
+    AuthHandoffs,
     AuthVerifier,
     LanguageModel,
     ObjectStorage,
@@ -29,6 +30,7 @@ class Container:
     llm: LanguageModel
     audio: AudioAssembler
     rate_limiter: RateLimiter
+    handoffs: AuthHandoffs
 
 
 def build_container(settings: Settings) -> Container:
@@ -36,6 +38,7 @@ def build_container(settings: Settings) -> Container:
     from app.adapters.audio.ffmpeg import FfmpegAudioAssembler
     from app.adapters.auth.supabase import SupabaseJwtVerifier
     from app.adapters.db.uow import SqlAlchemyUnitOfWorkFactory
+    from app.adapters.handoff.memory import InMemoryAuthHandoffs
     from app.adapters.llm.factory import build_language_model
     from app.adapters.ratelimit.memory import InMemoryRateLimiter
     from app.adapters.storage.supabase import SupabaseStorage
@@ -50,4 +53,5 @@ def build_container(settings: Settings) -> Container:
         llm=build_language_model(settings),
         audio=FfmpegAudioAssembler(),
         rate_limiter=InMemoryRateLimiter(),
+        handoffs=InMemoryAuthHandoffs(),
     )

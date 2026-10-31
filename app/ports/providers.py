@@ -67,3 +67,15 @@ class RateLimiter(Protocol):
     """Counts actions per key in a sliding window. Raises RateLimitedError when `limit` is already reached."""
 
     async def hit(self, key: str, *, limit: int, window_s: int) -> None: ...
+
+
+class AuthHandoffs(Protocol):
+    """One-time parking spot for an OAuth result, keyed by a random id the app generated.
+
+    Lets the app finish sign-in without the browser opening it (Expo Go cannot reliably accept that hand-back).
+    """
+
+    async def put(self, handoff_id: str, result: dict[str, str]) -> None: ...
+    async def take(self, handoff_id: str) -> dict[str, str] | None:
+        """Returns the result once, then forgets it. None if absent or expired."""
+        ...
