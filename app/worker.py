@@ -11,7 +11,7 @@ from app.logging import configure_logging
 
 async def main() -> None:
     settings = get_settings()
-    configure_logging(settings.log_level)
+    configure_logging(settings.log_level, settings.resolved_log_format)
     runner = JobRunner.from_container(build_container(settings))
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):

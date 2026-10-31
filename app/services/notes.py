@@ -6,10 +6,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
+import structlog
+
 from app.domain.errors import InvalidInputError
 from app.domain.models import NoteLine
 from app.ports.repositories import UnitOfWorkFactory
 from app.services.meetings import require_meeting
+
+log = structlog.get_logger(__name__)
 
 MAX_LINES = 2000
 MAX_LINE_CHARS = 5000
@@ -47,4 +51,5 @@ class NoteService:
             await require_meeting(uow, user_id=user_id, meeting_id=meeting_id)
             saved = await uow.notes.replace_all(meeting_id=meeting_id, lines=lines)
             await uow.commit()
+            log.info("notes.saved", meeting_id=str(meeting_id), lines=len(saved))
             return saved

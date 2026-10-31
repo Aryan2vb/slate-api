@@ -11,6 +11,8 @@ class Settings(BaseSettings):
 
     env: Literal["dev", "test", "prod"] = "dev"
     log_level: str = "INFO"
+    # Readable coloured lines locally, one JSON object per line in production. Unset: chosen from `env`.
+    log_format: Literal["console", "json"] | None = None
 
     database_url: str = "postgresql+asyncpg://slate:slate@localhost:5432/slate"
 
@@ -50,6 +52,11 @@ class Settings(BaseSettings):
     # Per-user limits on endpoints that spend provider credit (requests per rolling hour).
     rate_limit_processing_per_hour: int = 30  # finish + reprocess (Deepgram + LLM)
     rate_limit_catchup_per_hour: int = 60  # catch-up (LLM)
+    rate_limit_client_logs_per_hour: int = 720  # app log batches (one every ~5 s at most)
+
+    @property
+    def resolved_log_format(self) -> Literal["console", "json"]:
+        return self.log_format or ("console" if self.env == "dev" else "json")
 
     @model_validator(mode="after")
     def _no_dev_auth_in_prod(self) -> "Settings":

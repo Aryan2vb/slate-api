@@ -6,11 +6,15 @@ import uuid
 from dataclasses import dataclass
 from uuid import UUID
 
+import structlog
+
 from app.domain.errors import ConflictError, InvalidInputError, NotFoundError
 from app.domain.models import AudioChunk, ChunkStatus, Job, JobKind, MeetingStatus
 from app.ports.providers import ObjectStorage, SignedUpload
 from app.ports.repositories import UnitOfWorkFactory
 from app.services.meetings import require_meeting
+
+log = structlog.get_logger(__name__)
 
 ALLOWED_AUDIO_TYPES = frozenset({"audio/mp4", "audio/m4a", "audio/aac", "audio/wav", "audio/webm"})
 MAX_CHUNK_BYTES = 50 * 1024 * 1024
@@ -58,6 +62,7 @@ class UploadService:
                 if existing.status != ChunkStatus.PENDING:
                     raise ConflictError(f"Chunk {seq} is already uploaded")
                 upload = await self._storage.create_upload_url(existing.storage_path, overwrite=True)
+                log.info("chunk.reissued_upload_url", meeting_id=str(meeting_id), seq=seq, chunk_id=str(existing.id))
                 return ChunkUpload(chunk=existing, upload=upload)
             path = chunk_path(user_id, meeting_id, seq)
             upload = await self._storage.create_upload_url(path)
@@ -67,6 +72,7 @@ class UploadService:
             if meeting.status == MeetingStatus.DRAFT:
                 await uow.meetings.set_status(meeting_id=meeting_id, status=MeetingStatus.RECORDING)
             await uow.commit()
+            log.info("chunk.registered", meeting_id=str(meeting_id), seq=seq, chunk_id=str(chunk.id), bytes=byte_size)
             return ChunkUpload(chunk=chunk, upload=upload)
 
     async def mark_uploaded(self, *, user_id: UUID, meeting_id: UUID, chunk_id: UUID) -> AudioChunk:
@@ -76,6 +82,7 @@ class UploadService:
             if chunk is None:
                 raise NotFoundError("Chunk not found")
             await uow.commit()
+            log.info("chunk.uploaded", meeting_id=str(meeting_id), seq=chunk.seq, chunk_id=str(chunk_id))
             return chunk
 
     async def finish(self, *, user_id: UUID, meeting_id: UUID) -> list[Job]:
@@ -89,4 +96,9 @@ class UploadService:
                 await uow.meetings.set_status(meeting_id=meeting_id, status=MeetingStatus.PROCESSING)
             await uow.jobs.enqueue(meeting_id=meeting_id, user_id=user_id, kind=JobKind.TRANSCRIBE)
             await uow.commit()
+            log.info(
+                "meeting.finished",
+                meeting_id=str(meeting_id),
+                uploaded_chunks=sum(c.status == ChunkStatus.UPLOADED for c in chunks),
+            )
             return await uow.jobs.list_for_meeting(meeting_id=meeting_id)

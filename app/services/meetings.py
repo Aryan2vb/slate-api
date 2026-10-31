@@ -8,6 +8,8 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
 
+import structlog
+
 from app.domain.errors import NotFoundError
 from app.domain.models import (
     Attendee,
@@ -23,6 +25,8 @@ from app.domain.models import (
 )
 from app.ports.providers import ObjectStorage
 from app.ports.repositories import UnitOfWork, UnitOfWorkFactory
+
+log = structlog.get_logger(__name__)
 
 
 class Stage(StrEnum):
@@ -102,6 +106,7 @@ class MeetingService:
                 attendees=attendees,
             )
             await uow.commit()
+            log.info("meeting.created", meeting_id=str(meeting.id), template=meeting.template.value)
             return meeting
 
     async def list(self, *, user_id: UUID, limit: int, before: datetime | None) -> list[Meeting]:
@@ -128,6 +133,7 @@ class MeetingService:
             paths = [c.storage_path for c in await uow.chunks.list(meeting_id=meeting_id)]
             await uow.meetings.delete(user_id=user_id, meeting_id=meeting_id)
             await uow.commit()
+        log.info("meeting.deleted", meeting_id=str(meeting_id), audio_objects=len(paths))
         # After commit: a storage failure must not resurrect the meeting; orphaned objects are cheaper than that.
         if paths:
             await self._storage.delete(paths)

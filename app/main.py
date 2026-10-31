@@ -5,7 +5,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.errors import install_error_handlers
-from app.api.routes import auth_return, health, meetings, notes, processing, uploads
+from app.api.middleware import RequestLogMiddleware
+from app.api.routes import auth_return, client_logs, health, meetings, notes, processing, uploads
 from app.config import get_settings
 from app.container import Container, build_container
 from app.jobs.runner import start_worker, stop_worker
@@ -15,7 +16,7 @@ from app.logging import configure_logging
 def create_app(container: Container | None = None) -> FastAPI:
     """App factory. Pass a prebuilt Container in tests; production builds one from Settings."""
     settings = container.settings if container else get_settings()
-    configure_logging(settings.log_level)
+    configure_logging(settings.log_level, settings.resolved_log_format)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -43,10 +44,12 @@ def create_app(container: Container | None = None) -> FastAPI:
             CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"], allow_headers=["*"]
         )
     install_error_handlers(app)
+    app.add_middleware(RequestLogMiddleware)  # added last, so it wraps everything and times the whole request
     app.include_router(health.router)
     app.include_router(auth_return.router)
     app.include_router(meetings.router)
     app.include_router(notes.router)
     app.include_router(uploads.router)
     app.include_router(processing.router)
+    app.include_router(client_logs.router)
     return app
