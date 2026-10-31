@@ -2,7 +2,7 @@ import httpx
 import pytest
 import respx
 
-from app.adapters.stt.deepgram import DEEPGRAM_URL, DeepgramSpeechToText, normalize_keyterms
+from app.adapters.stt.deepgram import DEEPGRAM_URL, DeepgramSpeechToText, normalize_keyterms, parse_response
 from app.domain.errors import ProviderError
 from app.ports.providers import TranscriptionOptions
 
@@ -86,3 +86,18 @@ async def test_empty_audio_rejected() -> None:
     with pytest.raises(ProviderError) as exc:
         await _stt().transcribe(b"", "audio/wav", TranscriptionOptions())
     assert not exc.value.retryable
+
+
+def test_utterance_overlaps_are_trimmed_for_one_speaker_but_cross_talk_is_kept() -> None:
+    body = {
+        "results": {
+            "utterances": [
+                {"speaker": 0, "start": 2.79, "end": 7.75, "transcript": "an all electric air taxi"},
+                {"speaker": 0, "start": 7.205, "end": 11.205, "transcript": "designed as one of the most compact"},
+                {"speaker": 1, "start": 11.0, "end": 12.0, "transcript": "right"},
+            ]
+        }
+    }
+    segments = parse_response(body, "deepgram").segments
+
+    assert [(s.start_ms, s.end_ms) for s in segments] == [(2790, 7750), (7750, 11205), (11000, 12000)]

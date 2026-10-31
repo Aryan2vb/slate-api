@@ -106,7 +106,25 @@ ranges (start_ms/end_ms) copied from the transcript lines it is based on.
 3. Never state anything the transcript does not support. If something is unclear, put it in open_questions.
 4. Action items: who, what, and a due date only if one was said aloud. Decisions: only ones actually agreed.
 5. Omit empty sections. Be concise: prefer short, specific bullets over paraphrasing the whole conversation.
-6. The tldr is two sentences at most."""
+6. The tldr is two sentences at most.
+
+Write notes, not a transcript:
+7. Each "ai" block is one short point in your own words, not a copied transcript sentence. Group figures and \
+specifications together. Keep definitions, examples and formulas, and keep the speaker's framing, motivation and \
+conclusion as short points rather than dropping them.
+
+The transcript is machine speech recognition, so it contains misheard words. Read it as a listener would:
+8. Names, model numbers, acronyms and jargon are often split into sound-alike words ("L R one parser" for \
+"LR(1) parser", "cube control" for "kubectl", "EV toll aircraft" for "eVTOL aircraft"), and short phrases can turn \
+into a different phrase that sounds the same. When the sound and the context together make the intended words \
+clear, or the person typed the term in their notes, write the intended words. Never repeat a phrase that makes no \
+sense in context; if the intended words are unclear, leave the point out or add it to open_questions.
+9. If a passage repeats a few seconds after itself word for word (a stalled or replayed video, or a recognition \
+glitch), use it once.
+
+Stay faithful to what was said:
+10. Do not strengthen, generalise or add specifics: "systems" does not become "cells", "a speed of" does not \
+become "cruises at". Do not attribute intentions or requests nobody voiced. Numbers and units exactly as spoken."""
 
 
 def enhance_prompt(

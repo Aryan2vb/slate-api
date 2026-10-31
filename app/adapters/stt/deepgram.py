@@ -38,11 +38,30 @@ def _ms(seconds: Any) -> int:
 
 
 def _segments_from_utterances(utterances: list[dict[str, Any]]) -> list[TranscriptSegment]:
-    return [
-        TranscriptSegment(speaker=int(u.get("speaker") or 0), start_ms=_ms(u["start"]), end_ms=_ms(u["end"]), text=text)
-        for u in utterances
-        if (text := (u.get("transcript") or "").strip())
-    ]
+    return monotonic(
+        [
+            TranscriptSegment(
+                speaker=int(u.get("speaker") or 0), start_ms=_ms(u["start"]), end_ms=_ms(u["end"]), text=text
+            )
+            for u in utterances
+            if (text := (u.get("transcript") or "").strip())
+        ]
+    )
+
+
+def monotonic(segments: list[TranscriptSegment]) -> list[TranscriptSegment]:
+    """Orders segments by start and trims small overlaps, so displayed times never run backwards.
+
+    Deepgram's utterance edges can overlap by a few hundred ms (one utterance ends at 1:07.75, the next starts at
+    1:07.20). Same-speaker overlaps are trimmed to the previous end; real cross-talk between speakers is kept.
+    """
+    out: list[TranscriptSegment] = []
+    for seg in sorted(segments, key=lambda s: (s.start_ms, s.end_ms)):
+        prev = out[-1] if out else None
+        if prev and prev.speaker == seg.speaker and seg.start_ms < prev.end_ms <= seg.end_ms:
+            seg = seg.model_copy(update={"start_ms": prev.end_ms})
+        out.append(seg)
+    return out
 
 
 def _segments_from_words(words: list[dict[str, Any]]) -> list[TranscriptSegment]:

@@ -38,6 +38,8 @@ class Settings(BaseSettings):
 
     llm_provider: Literal["groq", "anthropic", "openai-compatible", "fake"] = "groq"
     llm_model: str | None = None  # provider default when unset
+    # Same provider and key; tried in order when the main model is busy (comma-separated in the environment).
+    llm_fallback_models: str = ""
     # openai-compatible only (OpenAI, OpenRouter, Together, Ollama...): endpoint and its key.
     llm_base_url: str | None = None
     llm_api_key: SecretStr = SecretStr("")

@@ -4,7 +4,7 @@ from datetime import datetime
 import pytest
 
 from app.domain.errors import InvalidInputError, NotFoundError, ProviderError
-from app.domain.models import Attendee, ChunkStatus, Meeting, MeetingStatus, TemplateKind
+from app.domain.models import Attendee, ChunkStatus, Meeting, MeetingStatus, NoteLine, TemplateKind
 from app.services.transcription import TranscriptionService, build_keyterms
 from tests.fakes import FakeAudio, FakeStorage, FakeStt, InMemoryUnitOfWorkFactory
 
@@ -113,3 +113,23 @@ def test_keyterms_put_attendees_first_dedupe_and_skip_stopwords() -> None:
         attendees=[Attendee(name="Priya"), Attendee(email="no-name@example.com")],
     )
     assert build_keyterms(meeting) == ["Priya", "Kubernetes", "team"]
+
+
+def test_keyterms_include_jargon_from_the_users_notes() -> None:
+    now = datetime.now()
+    meeting = Meeting(id=uuid.uuid4(), user_id=USER, title="Compiler design", created_at=now, updated_at=now)
+
+    def line(position: int, text: str) -> NoteLine:
+        return NoteLine(id=uuid.uuid4(), meeting_id=meeting.id, position=position, text=text, updated_at=now)
+
+    notes = [line(1, "LR(1) vs LALR parsers, see PT-01"), line(0, "eVTOL is the category. compute FIRST/FOLLOW sets")]
+
+    assert build_keyterms(meeting, notes) == [
+        "eVTOL",
+        "FIRST/FOLLOW",
+        "LR(1)",
+        "LALR",
+        "PT-01",
+        "Compiler",
+        "design",
+    ]

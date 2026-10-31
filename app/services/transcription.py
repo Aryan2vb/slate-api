@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from uuid import UUID
 
 import structlog
 
 from app.domain.errors import InvalidInputError, NotFoundError
-from app.domain.models import ChunkStatus, Meeting, MeetingStatus, Transcript
+from app.domain.models import ChunkStatus, Meeting, MeetingStatus, NoteLine, Transcript
 from app.ports.providers import AudioAssembler, ObjectStorage, SpeechToText, TranscriptionOptions
 from app.ports.repositories import UnitOfWorkFactory
 
@@ -43,12 +44,31 @@ _STOPWORDS = frozenset(
 )
 
 
-def build_keyterms(meeting: Meeting) -> list[str]:
-    """Names and distinctive title words the recognizer should favour. Attendee names come first."""
+# A token from the user's notes that looks like jargon: an acronym, mixed case, digits or joining punctuation
+# ("eVTOL", "PT-01", "LR(1)", "FIRST/FOLLOW"). Plain lowercase words are too common to be worth boosting.
+_NOTE_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9()+#./-]*[A-Za-z0-9)+#]")
+
+
+def _is_jargon(token: str) -> bool:
+    return (
+        (any(c.isdigit() for c in token) and any(c.isalpha() for c in token))
+        or any(c.isupper() for c in token[1:])
+        or any(c in "()+#/-" for c in token)
+    )
+
+
+def build_keyterms(meeting: Meeting, notes: Sequence[NoteLine] = ()) -> list[str]:
+    """Terms the recognizer should favour: attendee names, then jargon the user typed, then title words.
+
+    What the user types while listening is the best evidence of the vocabulary in the room, so a misheard term
+    ("EV toll" for "eVTOL") is far less likely once the user has written it down once.
+    """
     terms: list[str] = []
     for attendee in meeting.attendees:
         if attendee.name:
             terms.append(attendee.name.strip())
+    for line in sorted(notes, key=lambda n: n.position):
+        terms.extend(t for t in _NOTE_TOKEN.findall(line.text) if _is_jargon(t))
     for word in re.findall(r"[A-Za-z][A-Za-z0-9&+.-]{3,}", meeting.title):
         if word.lower() not in _STOPWORDS:
             terms.append(word)
@@ -74,13 +94,14 @@ class TranscriptionService:
             chunks = [c for c in await uow.chunks.list(meeting_id=meeting_id) if c.status == ChunkStatus.UPLOADED]
             if not chunks:
                 raise InvalidInputError("Meeting has no uploaded audio")
+            notes = await uow.notes.list(meeting_id=meeting_id)
             await uow.meetings.set_status(meeting_id=meeting_id, status=MeetingStatus.PROCESSING)
             await uow.commit()
 
         # Provider work runs outside any transaction: downloads and STT can take minutes.
         parts = [await self._storage.download(c.storage_path) for c in chunks]
         audio, mime_type = await self._audio.concat(parts, chunks[0].mime_type)
-        options = TranscriptionOptions(diarize=True, keyterms=build_keyterms(meeting))
+        options = TranscriptionOptions(diarize=True, keyterms=build_keyterms(meeting, notes))
         transcript = await self._stt.transcribe(audio, mime_type, options)
         log.info(
             "transcription.completed",
