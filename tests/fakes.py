@@ -23,12 +23,16 @@ from app.domain.models import (
     AuthUser,
     ChunkStatus,
     EnhancedNotes,
+    Folder,
+    FolderSummary,
     Job,
     JobKind,
     JobStatus,
     Meeting,
     MeetingStatus,
     NoteLine,
+    SearchHit,
+    SearchKind,
     Speaker,
     TemplateKind,
     Transcript,
@@ -44,6 +48,7 @@ def _now() -> datetime:
 
 @dataclass
 class InMemoryState:
+    folders: dict[UUID, Folder] = field(default_factory=dict)
     meetings: dict[UUID, Meeting] = field(default_factory=dict)
     notes: dict[UUID, list[NoteLine]] = field(default_factory=dict)
     chunks: dict[UUID, AudioChunk] = field(default_factory=dict)
@@ -51,6 +56,53 @@ class InMemoryState:
     speakers: dict[tuple[UUID, int], Speaker] = field(default_factory=dict)
     enhanced: dict[UUID, tuple[EnhancedNotes, str]] = field(default_factory=dict)
     jobs: dict[UUID, Job] = field(default_factory=dict)
+
+
+class _Folders:
+    def __init__(self, s: InMemoryState) -> None:
+        self.s = s
+
+    async def create(self, *, user_id: UUID, name: str, icon: str | None) -> Folder:
+        now = _now()
+        f = Folder(id=uuid.uuid4(), user_id=user_id, name=name, icon=icon, created_at=now, updated_at=now)
+        self.s.folders[f.id] = f
+        return f
+
+    async def get(self, *, user_id: UUID, folder_id: UUID) -> Folder | None:
+        f = self.s.folders.get(folder_id)
+        return f if f and f.user_id == user_id else None
+
+    async def list(self, *, user_id: UUID) -> list[FolderSummary]:
+        mine = sorted(
+            (f for f in self.s.folders.values() if f.user_id == user_id),
+            key=lambda f: (f.name.lower(), f.name, f.created_at),
+        )
+        return [
+            FolderSummary(
+                folder=f,
+                meeting_count=sum(1 for m in self.s.meetings.values() if m.folder_id == f.id),
+            )
+            for f in mine
+        ]
+
+    async def update(
+        self, *, user_id: UUID, folder_id: UUID, name: str, icon: str | None, vocabulary: Sequence[str]
+    ) -> Folder | None:
+        f = await self.get(user_id=user_id, folder_id=folder_id)
+        if f is None:
+            return None
+        f = f.model_copy(update={"name": name, "icon": icon, "vocabulary": list(vocabulary), "updated_at": _now()})
+        self.s.folders[folder_id] = f
+        return f
+
+    async def delete(self, *, user_id: UUID, folder_id: UUID) -> bool:
+        if await self.get(user_id=user_id, folder_id=folder_id) is None:
+            return False
+        del self.s.folders[folder_id]
+        for m in list(self.s.meetings.values()):  # ON DELETE SET NULL
+            if m.folder_id == folder_id:
+                self.s.meetings[m.id] = m.model_copy(update={"folder_id": None})
+        return True
 
 
 class _Meetings:
@@ -65,12 +117,14 @@ class _Meetings:
         template: TemplateKind,
         calendar_event_id: str | None,
         attendees: Sequence[Attendee],
+        folder_id: UUID | None = None,
     ) -> Meeting:
         now = _now()
         m = Meeting(
             id=uuid.uuid4(),
             user_id=user_id,
             title=title,
+            folder_id=folder_id,
             template=template,
             calendar_event_id=calendar_event_id,
             attendees=list(attendees),
@@ -90,11 +144,31 @@ class _Meetings:
             None,
         )
 
-    async def list(self, *, user_id: UUID, limit: int, before: datetime | None) -> list[Meeting]:
+    async def list(
+        self,
+        *,
+        user_id: UUID,
+        limit: int,
+        before: datetime | None,
+        folder_id: UUID | None = None,
+        unfiled: bool = False,
+    ) -> list[Meeting]:
         rows = [
-            m for m in self.s.meetings.values() if m.user_id == user_id and (before is None or m.created_at < before)
+            m
+            for m in self.s.meetings.values()
+            if m.user_id == user_id
+            and (before is None or m.created_at < before)
+            and (m.folder_id == folder_id if folder_id is not None else not unfiled or m.folder_id is None)
         ]
         return sorted(rows, key=lambda m: m.created_at, reverse=True)[:limit]
+
+    async def set_folder(self, *, user_id: UUID, meeting_id: UUID, folder_id: UUID | None) -> Meeting | None:
+        m = await self.get(user_id=user_id, meeting_id=meeting_id)
+        if m is None:
+            return None
+        m = m.model_copy(update={"folder_id": folder_id, "updated_at": _now()})
+        self.s.meetings[meeting_id] = m
+        return m
 
     async def set_status(self, *, meeting_id: UUID, status: MeetingStatus) -> None:
         m = self.s.meetings[meeting_id]
@@ -117,6 +191,13 @@ class _Notes:
 
     async def list(self, *, meeting_id: UUID) -> list[NoteLine]:
         return sorted(self.s.notes.get(meeting_id, []), key=lambda n: n.position)
+
+    async def list_for_folder(self, *, user_id: UUID, folder_id: UUID) -> list[NoteLine]:
+        meetings = sorted(
+            (m for m in self.s.meetings.values() if m.user_id == user_id and m.folder_id == folder_id),
+            key=lambda m: m.created_at,
+        )
+        return [line for m in meetings for line in await self.list(meeting_id=m.id)]
 
     async def replace_all(self, *, meeting_id: UUID, lines: Sequence[NoteLineInput]) -> list[NoteLine]:
         now = _now()
@@ -254,10 +335,56 @@ class _Jobs:
         return [j for j in self.s.jobs.values() if j.meeting_id == meeting_id]
 
 
+class _Search:
+    """Case-insensitive substring matching over the same three sources the SQL search covers."""
+
+    def __init__(self, s: InMemoryState) -> None:
+        self.s = s
+
+    async def search(self, *, user_id: UUID, query: str, folder_id: UUID | None, limit: int) -> list[SearchHit]:
+        needle = query.casefold()
+        hits: list[SearchHit] = []
+        for m in self.s.meetings.values():
+            if m.user_id != user_id or (folder_id is not None and m.folder_id != folder_id):
+                continue
+            base = {"meeting_id": m.id, "meeting_title": m.title, "folder_id": m.folder_id, "created_at": m.created_at}
+            for n in self.s.notes.get(m.id, []):
+                if needle in n.text.casefold():
+                    hits.append(SearchHit(kind=SearchKind.NOTE, text=n.text, start_ms=n.t_ms, **base))
+            for seg in self.s.transcripts.get(m.id, []):
+                if needle in seg.text.casefold():
+                    hits.append(
+                        SearchHit(
+                            kind=SearchKind.TRANSCRIPT,
+                            text=seg.text,
+                            start_ms=seg.start_ms,
+                            end_ms=seg.end_ms,
+                            speaker=seg.speaker,
+                            **base,
+                        )
+                    )
+            enhanced = self.s.enhanced.get(m.id)
+            for block in (b for sec in enhanced[0].sections for b in sec.blocks) if enhanced else ():
+                if block.source == "ai" and needle in block.text.casefold():
+                    first = block.evidence[0] if block.evidence else None
+                    hits.append(
+                        SearchHit(
+                            kind=SearchKind.AI_NOTE,
+                            text=block.text,
+                            start_ms=first.start_ms if first else None,
+                            end_ms=first.end_ms if first else None,
+                            **base,
+                        )
+                    )
+        hits = [h.model_copy(update={"rank": float(h.text.casefold().count(needle))}) for h in hits]
+        return sorted(hits, key=lambda h: (h.rank, h.created_at), reverse=True)[:limit]
+
+
 class InMemoryUnitOfWork:
     """Shares state across units of work. Commit is a no-op: tests assert on state, not transactions."""
 
     def __init__(self, state: InMemoryState) -> None:
+        self.folders = _Folders(state)
         self.meetings = _Meetings(state)
         self.notes = _Notes(state)
         self.chunks = _Chunks(state)
@@ -265,6 +392,7 @@ class InMemoryUnitOfWork:
         self.speakers = _Speakers(state)
         self.enhanced = _Enhanced(state)
         self.jobs = _Jobs(state)
+        self.search = _Search(state)
         self.committed = False
 
     async def __aenter__(self) -> Self:

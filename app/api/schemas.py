@@ -3,24 +3,30 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Annotated, Any, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.domain.models import (
     Attendee,
     AudioChunk,
     ChunkStatus,
     EnhancedNotes,
+    Folder,
+    FolderSummary,
     Job,
     JobKind,
     JobStatus,
     Meeting,
     MeetingStatus,
     NoteLine,
+    SearchHit,
+    SearchKind,
     TemplateKind,
 )
 from app.ports.providers import SignedUpload
+from app.services.folders import VocabularySuggestion
 from app.services.meetings import MeetingDetail, Stage
 
 
@@ -45,9 +51,38 @@ class CreateMeetingIn(_In):
     template: TemplateKind = TemplateKind.GENERAL
     calendar_event_id: str | None = Field(default=None, max_length=256)
     attendees: list[AttendeeIn] = Field(default_factory=list, max_length=200)
+    folder_id: UUID | None = None
 
     def attendee_models(self) -> list[Attendee]:
         return [Attendee(email=a.email, name=a.name) for a in self.attendees]
+
+
+class MoveMeetingIn(_In):
+    folder_id: UUID | None  # required; null unfiles the meeting
+
+
+class CreateFolderIn(_In):
+    name: str = Field(min_length=1, max_length=80)
+    icon: str | None = Field(default=None, max_length=40)
+
+
+class UpdateFolderIn(_In):
+    """Partial update: omitted fields are kept. `icon: null` clears the icon; name and vocabulary cannot be null."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    icon: str | None = Field(default=None, max_length=40)
+    # Normalised (trimmed, deduped, <= 100 terms of <= 100 chars) by the service; these bounds only cap the payload.
+    vocabulary: list[Annotated[str, Field(max_length=200)]] | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _no_null_name_or_vocabulary(self) -> Self:
+        for name in ("name", "vocabulary"):
+            if name in self.model_fields_set and getattr(self, name) is None:
+                raise ValueError(f"{name} cannot be null")
+        return self
+
+    def changes(self) -> dict[str, Any]:
+        return {k: getattr(self, k) for k in self.model_fields_set}
 
 
 class NoteLineIn(_In):
@@ -83,6 +118,7 @@ class MeetingOut(_Out):
     calendar_event_id: str | None
     attendees: list[AttendeeOut]
     languages: list[str]
+    folder_id: UUID | None
     started_at: datetime | None
     created_at: datetime
     updated_at: datetime
@@ -181,3 +217,61 @@ class JobsOut(_Out):
     @classmethod
     def of(cls, jobs: list[Job]) -> JobsOut:
         return cls(jobs=[JobOut.model_validate(j) for j in jobs])
+
+
+class FolderOut(_Out):
+    id: UUID
+    name: str
+    icon: str | None
+    vocabulary: list[str]
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def of(cls, f: Folder) -> FolderOut:
+        return cls.model_validate(f)
+
+
+class FolderSummaryOut(FolderOut):
+    meeting_count: int
+
+    @classmethod
+    def of_summary(cls, s: FolderSummary) -> FolderSummaryOut:
+        return cls.model_validate({**s.folder.model_dump(), "meeting_count": s.meeting_count})
+
+
+class FoldersOut(_Out):
+    items: list[FolderSummaryOut]
+
+
+class VocabularySuggestionOut(_Out):
+    term: str
+    count: int
+
+
+class VocabularySuggestionsOut(_Out):
+    suggestions: list[VocabularySuggestionOut]
+
+    @classmethod
+    def of(cls, items: list[VocabularySuggestion]) -> VocabularySuggestionsOut:
+        return cls(suggestions=[VocabularySuggestionOut.model_validate(x) for x in items])
+
+
+class SearchResultOut(_Out):
+    kind: SearchKind
+    meeting_id: UUID
+    meeting_title: str
+    folder_id: UUID | None
+    text: str  # a snippet around the match
+    start_ms: int | None  # offset into the recording (note: when typed; ai_note: its first evidence span)
+    end_ms: int | None
+    speaker: int | None  # transcript results only
+    created_at: datetime  # the meeting's
+
+
+class SearchOut(_Out):
+    items: list[SearchResultOut]
+
+    @classmethod
+    def of(cls, hits: list[SearchHit]) -> SearchOut:
+        return cls(items=[SearchResultOut.model_validate(h) for h in hits])

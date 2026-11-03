@@ -26,6 +26,26 @@ class AuthUser(_Model):
     email: str | None = None
 
 
+# --- Folders (courses) ----------------------------------------------------------------------------------------
+
+
+class Folder(_Model):
+    """A user's grouping of meetings, typically one course. `vocabulary` boosts recognition of its jargon."""
+
+    id: UUID
+    user_id: UUID
+    name: str
+    icon: str | None = None  # short client-side icon name (e.g. a Material icon)
+    vocabulary: list[str] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class FolderSummary(_Model):
+    folder: Folder
+    meeting_count: int
+
+
 # --- Meetings and notes ---------------------------------------------------------------------------------------
 
 
@@ -54,6 +74,7 @@ class Meeting(_Model):
     id: UUID
     user_id: UUID
     title: str
+    folder_id: UUID | None = None  # the course/folder it is filed under; None means unfiled
     template: TemplateKind = TemplateKind.GENERAL
     status: MeetingStatus = MeetingStatus.DRAFT
     calendar_event_id: str | None = None
@@ -159,6 +180,28 @@ class EnhancedNotes(_Model):
     action_items: list[ActionItem] = Field(default_factory=list)
     decisions: list[str] = Field(default_factory=list)
     open_questions: list[str] = Field(default_factory=list)
+
+
+# --- Search ---------------------------------------------------------------------------------------------------
+
+
+class SearchKind(StrEnum):
+    NOTE = "note"  # a line the user typed
+    TRANSCRIPT = "transcript"  # a transcript segment
+    AI_NOTE = "ai_note"  # a block of the enhanced notes
+
+
+class SearchHit(_Model):
+    kind: SearchKind
+    meeting_id: UUID
+    meeting_title: str
+    folder_id: UUID | None
+    text: str
+    start_ms: int | None = None  # where in the recording; None when the source has no timestamp
+    end_ms: int | None = None
+    speaker: int | None = None  # transcript hits only
+    created_at: datetime  # the meeting's, so hits can be ordered by recency
+    rank: float = 0.0
 
 
 # --- Jobs -----------------------------------------------------------------------------------------------------

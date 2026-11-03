@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     llm_base_url: str | None = None
     llm_api_key: SecretStr = SecretStr("")
     anthropic_api_key: SecretStr = SecretStr("")
+    # Largest prompt (estimated tokens) sent in one LLM request. Longer meetings are enhanced in parts and merged, so
+    # notes never depend on one huge request (some providers reject any request above their tokens-per-minute cap).
+    llm_max_input_tokens: int = 6000
 
     run_worker_in_process: bool = True
     worker_poll_interval_s: float = 2.0
@@ -55,6 +58,7 @@ class Settings(BaseSettings):
     rate_limit_processing_per_hour: int = 30  # finish + reprocess (Deepgram + LLM)
     rate_limit_catchup_per_hour: int = 60  # catch-up (LLM)
     rate_limit_client_logs_per_hour: int = 720  # app log batches (one every ~5 s at most)
+    rate_limit_search_per_hour: int = 600  # search (Postgres only; generous for search-as-you-type)
 
     @property
     def resolved_log_format(self) -> Literal["console", "json"]:

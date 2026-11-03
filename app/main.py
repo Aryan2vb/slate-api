@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.errors import install_error_handlers
 from app.api.middleware import RequestLogMiddleware
-from app.api.routes import auth_return, client_logs, health, meetings, notes, processing, uploads
+from app.api.routes import auth_return, client_logs, folders, health, meetings, notes, processing, search, uploads
 from app.config import get_settings
 from app.container import Container, build_container
 from app.jobs.runner import start_worker, stop_worker
@@ -48,8 +48,10 @@ def create_app(container: Container | None = None) -> FastAPI:
     app.include_router(health.router)
     app.include_router(auth_return.router)
     app.include_router(meetings.router)
+    app.include_router(folders.router)
     app.include_router(notes.router)
     app.include_router(uploads.router)
     app.include_router(processing.router)
     app.include_router(client_logs.router)
+    app.include_router(search.router)
     return app

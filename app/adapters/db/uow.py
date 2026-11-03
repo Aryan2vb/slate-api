@@ -9,9 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from app.adapters.db.repositories import (
     SqlChunkRepository,
     SqlEnhancedNotesRepository,
+    SqlFolderRepository,
     SqlJobRepository,
     SqlMeetingRepository,
     SqlNoteRepository,
+    SqlSearchRepository,
     SqlSpeakerRepository,
     SqlTranscriptRepository,
 )
@@ -19,6 +21,7 @@ from app.adapters.db.session import make_engine, make_sessionmaker
 
 
 class SqlAlchemyUnitOfWork:
+    folders: SqlFolderRepository
     meetings: SqlMeetingRepository
     notes: SqlNoteRepository
     chunks: SqlChunkRepository
@@ -26,6 +29,7 @@ class SqlAlchemyUnitOfWork:
     speakers: SqlSpeakerRepository
     enhanced: SqlEnhancedNotesRepository
     jobs: SqlJobRepository
+    search: SqlSearchRepository
 
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         self._sessionmaker = sessionmaker
@@ -34,6 +38,7 @@ class SqlAlchemyUnitOfWork:
     async def __aenter__(self) -> Self:
         session = self._sessionmaker()
         self._session = session
+        self.folders = SqlFolderRepository(session)
         self.meetings = SqlMeetingRepository(session)
         self.notes = SqlNoteRepository(session)
         self.chunks = SqlChunkRepository(session)
@@ -41,6 +46,7 @@ class SqlAlchemyUnitOfWork:
         self.speakers = SqlSpeakerRepository(session)
         self.enhanced = SqlEnhancedNotesRepository(session)
         self.jobs = SqlJobRepository(session)
+        self.search = SqlSearchRepository(session)
         return self
 
     async def __aexit__(self, *exc: object) -> None:

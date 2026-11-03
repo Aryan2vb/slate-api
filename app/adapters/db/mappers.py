@@ -3,6 +3,7 @@
 from app.adapters.db.tables import (
     AudioChunkRow,
     EnhancedNotesRow,
+    FolderRow,
     JobRow,
     MeetingRow,
     NoteLineRow,
@@ -12,12 +13,17 @@ from app.adapters.db.tables import (
 from app.domain.models import (
     AudioChunk,
     EnhancedNotes,
+    Folder,
     Job,
     Meeting,
     NoteLine,
     Speaker,
     TranscriptSegment,
 )
+
+
+def folder(row: FolderRow) -> Folder:
+    return Folder.model_validate(row)
 
 
 def meeting(row: MeetingRow) -> Meeting:

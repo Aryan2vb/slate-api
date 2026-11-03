@@ -1,4 +1,4 @@
-"""Meeting lifecycle: create, list, read the full detail view, delete."""
+"""Meeting lifecycle: create, list, file into a folder, read the full detail view, delete."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from uuid import UUID
 
 import structlog
 
-from app.domain.errors import NotFoundError
+from app.domain.errors import InvalidInputError, NotFoundError
 from app.domain.models import (
     Attendee,
     EnhancedNotes,
@@ -25,6 +25,7 @@ from app.domain.models import (
 )
 from app.ports.providers import ObjectStorage
 from app.ports.repositories import UnitOfWork, UnitOfWorkFactory
+from app.services.folders import require_folder
 
 log = structlog.get_logger(__name__)
 
@@ -90,8 +91,11 @@ class MeetingService:
         template: TemplateKind,
         calendar_event_id: str | None,
         attendees: Sequence[Attendee],
+        folder_id: UUID | None = None,
     ) -> Meeting:
         async with self._uow() as uow:
+            if folder_id is not None:
+                await require_folder(uow, user_id=user_id, folder_id=folder_id)
             if calendar_event_id is not None:
                 existing = await uow.meetings.get_by_calendar_event(
                     user_id=user_id, calendar_event_id=calendar_event_id
@@ -104,14 +108,42 @@ class MeetingService:
                 template=template,
                 calendar_event_id=calendar_event_id,
                 attendees=attendees,
+                folder_id=folder_id,
             )
             await uow.commit()
             log.info("meeting.created", meeting_id=str(meeting.id), template=meeting.template.value)
             return meeting
 
-    async def list(self, *, user_id: UUID, limit: int, before: datetime | None) -> list[Meeting]:
+    async def list(
+        self,
+        *,
+        user_id: UUID,
+        limit: int,
+        before: datetime | None,
+        folder_id: UUID | None = None,
+        unfiled: bool = False,
+    ) -> list[Meeting]:
+        if folder_id is not None and unfiled:
+            raise InvalidInputError("Filter by folder_id or unfiled, not both")
         async with self._uow() as uow:
-            return await uow.meetings.list(user_id=user_id, limit=limit, before=before)
+            if folder_id is not None:
+                await require_folder(uow, user_id=user_id, folder_id=folder_id)
+            return await uow.meetings.list(
+                user_id=user_id, limit=limit, before=before, folder_id=folder_id, unfiled=unfiled
+            )
+
+    async def move(self, *, user_id: UUID, meeting_id: UUID, folder_id: UUID | None) -> Meeting:
+        """Files a meeting under one of the user's folders, or unfiles it (folder_id None)."""
+        async with self._uow() as uow:
+            await require_meeting(uow, user_id=user_id, meeting_id=meeting_id)
+            if folder_id is not None:
+                await require_folder(uow, user_id=user_id, folder_id=folder_id)
+            meeting = await uow.meetings.set_folder(user_id=user_id, meeting_id=meeting_id, folder_id=folder_id)
+            if meeting is None:
+                raise NotFoundError("Meeting not found")
+            await uow.commit()
+        log.info("meeting.moved", meeting_id=str(meeting_id), folder_id=str(folder_id) if folder_id else None)
+        return meeting
 
     async def detail(self, *, user_id: UUID, meeting_id: UUID) -> MeetingDetail:
         async with self._uow() as uow:

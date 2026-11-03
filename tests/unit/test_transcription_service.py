@@ -5,7 +5,7 @@ import pytest
 
 from app.domain.errors import InvalidInputError, NotFoundError, ProviderError
 from app.domain.models import Attendee, ChunkStatus, Meeting, MeetingStatus, NoteLine, TemplateKind
-from app.services.transcription import TranscriptionService, build_keyterms
+from app.services.transcription import MAX_KEYTERMS, TranscriptionService, build_keyterms
 from tests.fakes import FakeAudio, FakeStorage, FakeStt, InMemoryUnitOfWorkFactory
 
 USER = uuid.uuid4()
@@ -133,3 +133,44 @@ def test_keyterms_include_jargon_from_the_users_notes() -> None:
         "Compiler",
         "design",
     ]
+
+
+def test_keyterms_put_folder_vocabulary_after_attendees_and_before_note_jargon() -> None:
+    now = datetime.now()
+    meeting = Meeting(
+        id=uuid.uuid4(),
+        user_id=USER,
+        title="Compiler design",
+        created_at=now,
+        updated_at=now,
+        attendees=[Attendee(name="Dr Rao")],
+    )
+    notes = [NoteLine(id=uuid.uuid4(), meeting_id=meeting.id, position=0, text="LALR and lr(1)", updated_at=now)]
+
+    assert build_keyterms(meeting, notes, ["LR(1)", "Shift-reduce"]) == [
+        "Dr Rao",
+        "LR(1)",
+        "Shift-reduce",
+        "LALR",  # "lr(1)" from the notes is a duplicate of the vocabulary term
+        "Compiler",
+        "design",
+    ]
+
+
+def test_keyterms_stay_capped_with_a_full_vocabulary() -> None:
+    now = datetime.now()
+    meeting = Meeting(id=uuid.uuid4(), user_id=USER, title="Compilers", created_at=now, updated_at=now)
+    terms = build_keyterms(meeting, (), [f"term{i}" for i in range(100)])
+    assert len(terms) == MAX_KEYTERMS and terms[0] == "term0"
+
+
+async def test_transcribe_boosts_the_meetings_folder_vocabulary() -> None:
+    service, uow, _, stt, meeting = await _setup()
+    async with uow() as u:
+        folder = await u.folders.create(user_id=USER, name="Compilers", icon=None)
+        await u.folders.update(user_id=USER, folder_id=folder.id, name="Compilers", icon=None, vocabulary=["LR(1)"])
+        await u.meetings.set_folder(user_id=USER, meeting_id=meeting.id, folder_id=folder.id)
+
+    await service.transcribe(user_id=USER, meeting_id=meeting.id)
+
+    assert stt.calls[0].keyterms[:2] == ["Priya Shah", "LR(1)"]

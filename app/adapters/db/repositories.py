@@ -3,36 +3,63 @@ and never commits; transaction boundaries belong to the caller."""
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, delete, func, select, update
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import (
+    CursorResult,
+    Float,
+    Integer,
+    String,
+    case,
+    column,
+    delete,
+    func,
+    literal,
+    literal_column,
+    null,
+    select,
+    true,
+    union_all,
+    update,
+)
+from sqlalchemy import cast as sql_cast
+from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import InstrumentedAttribute
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.adapters.db import mappers
 from app.adapters.db.tables import (
+    SIMPLE_TS_CONFIG,
     AudioChunkRow,
     EnhancedNotesRow,
+    FolderRow,
     JobRow,
     MeetingRow,
     NoteLineRow,
     SpeakerRow,
     TranscriptSegmentRow,
+    simple_tsvector,
 )
 from app.domain.models import (
     Attendee,
     AudioChunk,
     ChunkStatus,
     EnhancedNotes,
+    Folder,
+    FolderSummary,
     Job,
     JobKind,
     JobStatus,
     Meeting,
     MeetingStatus,
     NoteLine,
+    SearchHit,
+    SearchKind,
     Speaker,
     TemplateKind,
     TranscriptSegment,
@@ -42,6 +69,53 @@ from app.ports.repositories import NoteLineInput
 
 def _rowcount(result: Any) -> int:
     return cast(CursorResult[Any], result).rowcount
+
+
+class SqlFolderRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def create(self, *, user_id: UUID, name: str, icon: str | None) -> Folder:
+        row = FolderRow(user_id=user_id, name=name, icon=icon, vocabulary=[])
+        self._s.add(row)
+        await self._s.flush()
+        await self._s.refresh(row)
+        return mappers.folder(row)
+
+    async def get(self, *, user_id: UUID, folder_id: UUID) -> Folder | None:
+        row = await self._s.scalar(select(FolderRow).where(FolderRow.id == folder_id, FolderRow.user_id == user_id))
+        return mappers.folder(row) if row else None
+
+    async def list(self, *, user_id: UUID) -> list[FolderSummary]:
+        counts = (
+            select(MeetingRow.folder_id, func.count().label("n"))
+            .where(MeetingRow.user_id == user_id, MeetingRow.folder_id.is_not(None))
+            .group_by(MeetingRow.folder_id)
+            .subquery()
+        )
+        rows = await self._s.execute(
+            select(FolderRow, func.coalesce(counts.c.n, 0))
+            .outerjoin(counts, counts.c.folder_id == FolderRow.id)
+            .where(FolderRow.user_id == user_id)
+            .order_by(func.lower(FolderRow.name), FolderRow.name, FolderRow.created_at)
+        )
+        return [FolderSummary(folder=mappers.folder(row), meeting_count=n) for row, n in rows]
+
+    async def update(
+        self, *, user_id: UUID, folder_id: UUID, name: str, icon: str | None, vocabulary: Sequence[str]
+    ) -> Folder | None:
+        row = await self._s.scalar(
+            update(FolderRow)
+            .where(FolderRow.id == folder_id, FolderRow.user_id == user_id)
+            .values(name=name, icon=icon, vocabulary=list(vocabulary))
+            .returning(FolderRow)
+        )
+        return mappers.folder(row) if row else None
+
+    async def delete(self, *, user_id: UUID, folder_id: UUID) -> bool:
+        # meetings.folder_id is ON DELETE SET NULL, so the folder's meetings become unfiled.
+        result = await self._s.execute(delete(FolderRow).where(FolderRow.id == folder_id, FolderRow.user_id == user_id))
+        return _rowcount(result) > 0
 
 
 class SqlMeetingRepository:
@@ -56,10 +130,12 @@ class SqlMeetingRepository:
         template: TemplateKind,
         calendar_event_id: str | None,
         attendees: Sequence[Attendee],
+        folder_id: UUID | None = None,
     ) -> Meeting:
         row = MeetingRow(
             user_id=user_id,
             title=title,
+            folder_id=folder_id,
             template=template.value,
             status=MeetingStatus.DRAFT.value,
             calendar_event_id=calendar_event_id,
@@ -80,12 +156,33 @@ class SqlMeetingRepository:
         )
         return mappers.meeting(row) if row else None
 
-    async def list(self, *, user_id: UUID, limit: int, before: datetime | None) -> list[Meeting]:
+    async def list(
+        self,
+        *,
+        user_id: UUID,
+        limit: int,
+        before: datetime | None,
+        folder_id: UUID | None = None,
+        unfiled: bool = False,
+    ) -> list[Meeting]:
         stmt = select(MeetingRow).where(MeetingRow.user_id == user_id)
         if before is not None:
             stmt = stmt.where(MeetingRow.created_at < before)
+        if folder_id is not None:
+            stmt = stmt.where(MeetingRow.folder_id == folder_id)
+        elif unfiled:
+            stmt = stmt.where(MeetingRow.folder_id.is_(None))
         rows = await self._s.scalars(stmt.order_by(MeetingRow.created_at.desc()).limit(limit))
         return [mappers.meeting(r) for r in rows]
+
+    async def set_folder(self, *, user_id: UUID, meeting_id: UUID, folder_id: UUID | None) -> Meeting | None:
+        row = await self._s.scalar(
+            update(MeetingRow)
+            .where(MeetingRow.id == meeting_id, MeetingRow.user_id == user_id)
+            .values(folder_id=folder_id)
+            .returning(MeetingRow)
+        )
+        return mappers.meeting(row) if row else None
 
     async def set_status(self, *, meeting_id: UUID, status: MeetingStatus) -> None:
         await self._s.execute(update(MeetingRow).where(MeetingRow.id == meeting_id).values(status=status.value))
@@ -107,6 +204,15 @@ class SqlNoteRepository:
     async def list(self, *, meeting_id: UUID) -> list[NoteLine]:
         rows = await self._s.scalars(
             select(NoteLineRow).where(NoteLineRow.meeting_id == meeting_id).order_by(NoteLineRow.position)
+        )
+        return [mappers.note_line(r) for r in rows]
+
+    async def list_for_folder(self, *, user_id: UUID, folder_id: UUID) -> list[NoteLine]:
+        rows = await self._s.scalars(
+            select(NoteLineRow)
+            .join(MeetingRow, MeetingRow.id == NoteLineRow.meeting_id)
+            .where(MeetingRow.user_id == user_id, MeetingRow.folder_id == folder_id)
+            .order_by(MeetingRow.created_at, NoteLineRow.position)
         )
         return [mappers.note_line(r) for r in rows]
 
@@ -239,6 +345,126 @@ class SqlEnhancedNotesRepository:
     async def get(self, *, meeting_id: UUID) -> EnhancedNotes | None:
         row = await self._s.get(EnhancedNotesRow, meeting_id)
         return mappers.enhanced_notes(row) if row else None
+
+
+# --- Search ---------------------------------------------------------------------------------------------------
+
+# Below this length, or when the query carries punctuation ("LR(1)", "FIRST/FOLLOW", "C++"), a substring match
+# (ILIKE) is what the user means; the 'simple' parser would split such terms apart or find nothing.
+MIN_FTS_QUERY_CHARS = 3
+_ASCII_PUNCT = "!-/:-@\\[-`{-~"
+_HAS_PUNCT = re.compile(f"[{_ASCII_PUNCT}]")
+_WORD = re.compile(f"[^\\s{_ASCII_PUNCT}]+")  # any run of non-space, non-ASCII-punctuation (keeps Devanagari)
+
+
+def tsquery_for(query: str, *, prefix: bool = True) -> str | None:
+    """A tsquery for word-like queries ("'compil':* & 'design':*"), prefix-matching so results appear while the user
+    types; None when the query should be matched as a substring instead."""
+    if len(query) < MIN_FTS_QUERY_CHARS or _HAS_PUNCT.search(query):
+        return None
+    words = _WORD.findall(query)
+    # Words hold no quotes or backslashes (ASCII punctuation is excluded), so quoting them is safe.
+    return " & ".join(f"'{w}'{':*' if prefix else ''}" for w in words) or None
+
+
+def like_pattern(query: str) -> str:
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+type _Col[T] = ColumnElement[T] | InstrumentedAttribute[T]
+
+
+class SqlSearchRepository:
+    """Full-text search with the 'simple' configuration (no stemming, no stop words: content is Hindi/English
+    mixed), using the GIN expression indexes from tables.py; ILIKE substring matching for short or punctuated
+    queries. Every branch joins meetings and filters on user_id, so ownership is enforced in SQL.
+
+    Enhanced notes are stored as one JSONB document per meeting; AI-written blocks (sections[].blocks[] with
+    source "ai") are expanded with jsonb_array_elements. User-sourced blocks are skipped: they repeat the user's
+    own note lines, which are already searched directly.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def search(self, *, user_id: UUID, query: str, folder_id: UUID | None, limit: int) -> list[SearchHit]:
+        tsquery_text = tsquery_for(query)
+        pattern = like_pattern(query)
+        tsq = func.to_tsquery(SIMPLE_TS_CONFIG, tsquery_text) if tsquery_text else None
+        exact_tsq = func.to_tsquery(SIMPLE_TS_CONFIG, tsquery_for(query, prefix=False))
+
+        def match(text: _Col[str]) -> ColumnElement[bool]:
+            if tsq is None:
+                return text.ilike(pattern, escape="\\")
+            return simple_tsvector(text).op("@@")(tsq)
+
+        def rank(text: _Col[str]) -> ColumnElement[float]:
+            if tsq is None:
+                return sql_cast(literal(1.0), Float)
+            # Whole-word hits rank above prefix-only ones ("DFA" above "DFAs").
+            exact = case((simple_tsvector(text).op("@@")(exact_tsq), 1.0), else_=0.0)
+            return sql_cast(func.ts_rank_cd(simple_tsvector(text), tsq), Float) + exact
+
+        def branch(
+            kind: SearchKind,
+            text: _Col[str],
+            start_ms: _Col[Any],
+            end_ms: _Col[Any],
+            speaker: _Col[Any],
+        ):
+            stmt = select(
+                literal_column(f"'{kind.value}'", String).label("kind"),
+                MeetingRow.id.label("meeting_id"),
+                MeetingRow.title.label("meeting_title"),
+                MeetingRow.folder_id.label("folder_id"),
+                text.label("text"),
+                start_ms.label("start_ms"),
+                end_ms.label("end_ms"),
+                speaker.label("speaker"),
+                MeetingRow.created_at.label("created_at"),
+                rank(text).label("rank"),
+            ).where(MeetingRow.user_id == user_id, match(text))
+            return stmt.where(MeetingRow.folder_id == folder_id) if folder_id is not None else stmt
+
+        no_int = sql_cast(null(), Integer)
+        notes = branch(SearchKind.NOTE, NoteLineRow.text, NoteLineRow.t_ms, no_int, no_int).join_from(
+            NoteLineRow, MeetingRow, MeetingRow.id == NoteLineRow.meeting_id
+        )
+        seg = TranscriptSegmentRow
+        segments = branch(SearchKind.TRANSCRIPT, seg.text, seg.start_ms, seg.end_ms, seg.speaker).join_from(
+            seg, MeetingRow, MeetingRow.id == seg.meeting_id
+        )
+
+        sections = (
+            func.jsonb_array_elements(EnhancedNotesRow.content["sections"])
+            .table_valued(column("value", JSONB))
+            .lateral("section")
+        )
+        blocks = (
+            func.jsonb_array_elements(sections.c.value["blocks"]).table_valued(column("value", JSONB)).lateral("block")
+        )
+        block = blocks.c.value
+
+        def evidence_ms(key: str) -> ColumnElement[Any]:  # the block's first evidence span, if any
+            return sql_cast(block[("evidence", "0", key)].astext, Integer)
+
+        ai_notes = (
+            branch(SearchKind.AI_NOTE, block["text"].astext, evidence_ms("start_ms"), evidence_ms("end_ms"), no_int)
+            .select_from(EnhancedNotesRow)
+            .join(MeetingRow, MeetingRow.id == EnhancedNotesRow.meeting_id)
+            .join(sections, true())
+            .join(blocks, true())
+            .where(block["source"].astext == "ai")
+        )
+        if tsq is not None:  # index-backed prefilter on the whole document before expanding its blocks
+            ai_notes = ai_notes.where(simple_tsvector(EnhancedNotesRow.content).op("@@")(tsq))
+
+        hits = union_all(notes, segments, ai_notes).subquery("hits")
+        rows = await self._s.execute(
+            select(hits).order_by(hits.c.rank.desc(), hits.c.created_at.desc(), hits.c.start_ms).limit(limit)
+        )
+        return [SearchHit.model_validate(dict(r)) for r in rows.mappings()]
 
 
 _ACTIVE = (JobStatus.QUEUED.value, JobStatus.RUNNING.value)
