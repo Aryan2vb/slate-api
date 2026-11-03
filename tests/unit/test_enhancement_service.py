@@ -121,3 +121,16 @@ def test_user_block_text_is_rebuilt_from_the_original_line() -> None:
     user_texts = [b.text for s in grounded.sections for b in s.blocks if b.source == "user"]
     assert user_texts == ["Pro price -> $15?", "Marcus:  billing + email"]
     assert all(s.heading != RESTORED_SECTION for s in grounded.sections)
+
+
+def test_user_line_repeated_by_overlapping_parts_is_kept_once() -> None:
+    notes = _notes(
+        NoteBlock(source="user", text="prices up"),
+        NoteBlock(source="user", text="[01:00] prices up", evidence=_ev(0, 10)),
+        NoteBlock(source="user", text="prices up\nship it"),
+    )
+    grounded = ground_notes(notes, [_line(0, "prices up"), _line(1, "ship it")], SEGMENTS)
+    assert [(b.source, b.text) for s in grounded.sections for b in s.blocks] == [
+        ("user", "prices up"),
+        ("user", "ship it"),
+    ]

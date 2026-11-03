@@ -150,6 +150,62 @@ Transcript ([mm:ss] (start-end ms) speaker: text):
 </transcript>"""
 
 
+# Long meetings are enhanced in parts (map) and the parts combined (reduce), so no single request has to carry the
+# whole transcript. Each part follows the same rules as a whole meeting.
+ENHANCE_WINDOW_SYSTEM = (
+    ENHANCE_SYSTEM
+    + """
+
+This transcript is one part of a longer meeting; other parts are handled separately and merged afterwards:
+11. Write notes for this part only. Include only the person's lines given here; the rest belong to other parts.
+12. The title may be provisional and the tldr covers this part. Evidence ranges must come from this part."""
+)
+
+
+def enhance_window_prompt(
+    *,
+    part: int,
+    parts: int,
+    title: str,
+    template: TemplateKind,
+    attendees: str,
+    notes: str,
+    transcript: str,
+    languages: Sequence[str] = (),
+) -> str:
+    whole = enhance_prompt(
+        title=title, template=template, attendees=attendees, notes=notes, transcript=transcript, languages=languages
+    )
+    return f"Part {part} of {parts} of the meeting.\n{whole}"
+
+
+MERGE_SYSTEM = """\
+You combine partial notes, written for consecutive parts of one meeting, into one set of notes with the same schema.
+1. Keep every block with source "user" exactly as written, once. Do not reword, fix or merge them.
+2. Merge sections that cover the same topic, keeping topics in the order they were discussed. Remove points that \
+repeat across parts (parts overlap slightly), keeping the clearer one.
+3. Keep every evidence range exactly as given; when two blocks are combined, keep the evidence of both. Never \
+invent evidence or content: use only what the partial notes say.
+4. Combine action items, decisions and open questions, removing duplicates. Drop an open question that a later \
+part answers.
+5. Write one title for the whole meeting and a tldr of two sentences at most.
+6. Keep the language the partial notes are written in; do not translate."""
+
+
+def merge_prompt(
+    *, title: str, template: TemplateKind, partials: str, parts: int, languages: Sequence[str] = ()
+) -> str:
+    return f"""\
+Meeting: {title}
+Type guidance: {TEMPLATE_GUIDANCE[template]}
+Language: {language_rule(languages)}
+
+Partial notes for {parts} consecutive parts of the meeting, in order (JSON):
+<partials>
+{partials}
+</partials>"""
+
+
 SPEAKERS_SYSTEM = """\
 You identify who is speaking in a diarized meeting transcript. Speakers are labelled "Speaker N".
 Use only evidence in the transcript: self-introductions ("I'm Priya"), being addressed by name right before \
