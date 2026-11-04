@@ -34,7 +34,7 @@ async def current_user(
 
 CurrentUser = Annotated[AuthUser, Depends(current_user)]
 
-LimitedAction = Literal["processing", "catchup", "client_logs", "search"]
+LimitedAction = Literal["processing", "catchup", "client_logs", "search", "ask"]
 
 
 def rate_limit(action: LimitedAction) -> Callable[..., Awaitable[None]]:
@@ -47,6 +47,7 @@ def rate_limit(action: LimitedAction) -> Callable[..., Awaitable[None]]:
             "catchup": s.rate_limit_catchup_per_hour,
             "client_logs": s.rate_limit_client_logs_per_hour,
             "search": s.rate_limit_search_per_hour,
+            "ask": s.rate_limit_ask_per_hour,
         }[action]
         await container.rate_limiter.hit(f"{action}:{user.id}", limit=limit, window_s=3600)
 

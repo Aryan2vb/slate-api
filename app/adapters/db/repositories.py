@@ -41,6 +41,7 @@ from app.adapters.db.tables import (
     JobRow,
     MeetingRow,
     NoteLineRow,
+    ShareRow,
     SpeakerRow,
     TranscriptSegmentRow,
     simple_tsvector,
@@ -60,6 +61,7 @@ from app.domain.models import (
     NoteLine,
     SearchHit,
     SearchKind,
+    Share,
     Speaker,
     TemplateKind,
     TranscriptSegment,
@@ -116,6 +118,9 @@ class SqlFolderRepository:
         # meetings.folder_id is ON DELETE SET NULL, so the folder's meetings become unfiled.
         result = await self._s.execute(delete(FolderRow).where(FolderRow.id == folder_id, FolderRow.user_id == user_id))
         return _rowcount(result) > 0
+
+    async def delete_all(self, *, user_id: UUID) -> int:
+        return _rowcount(await self._s.execute(delete(FolderRow).where(FolderRow.user_id == user_id)))
 
 
 class SqlMeetingRepository:
@@ -190,11 +195,48 @@ class SqlMeetingRepository:
     async def set_languages(self, *, meeting_id: UUID, languages: Sequence[str]) -> None:
         await self._s.execute(update(MeetingRow).where(MeetingRow.id == meeting_id).values(languages=list(languages)))
 
+    async def set_audio(
+        self, *, meeting_id: UUID, path: str | None, expires_at: datetime | None, duration_ms: int | None
+    ) -> None:
+        await self._s.execute(
+            update(MeetingRow)
+            .where(MeetingRow.id == meeting_id)
+            .values(audio_path=path, audio_expires_at=expires_at, audio_duration_ms=duration_ms)
+        )
+
+    async def list_expired_audio(self, *, now: datetime, limit: int) -> list[Meeting]:
+        rows = await self._s.scalars(
+            select(MeetingRow)
+            .where(MeetingRow.audio_expires_at <= now)  # served by the partial ix_meetings_audio_expires_at
+            .order_by(MeetingRow.audio_expires_at)
+            .limit(limit)
+        )
+        return [mappers.meeting(r) for r in rows]
+
+    async def clear_audio(self, *, meeting_ids: Sequence[UUID]) -> None:
+        if meeting_ids:
+            await self._s.execute(
+                update(MeetingRow)
+                .where(MeetingRow.id.in_(list(meeting_ids)))
+                .values(audio_path=None, audio_expires_at=None, audio_duration_ms=None)
+            )
+
     async def delete(self, *, user_id: UUID, meeting_id: UUID) -> bool:
         result = await self._s.execute(
             delete(MeetingRow).where(MeetingRow.id == meeting_id, MeetingRow.user_id == user_id)
         )
         return _rowcount(result) > 0
+
+    async def list_all(self, *, user_id: UUID) -> list[Meeting]:
+        rows = await self._s.scalars(
+            select(MeetingRow).where(MeetingRow.user_id == user_id).order_by(MeetingRow.created_at, MeetingRow.id)
+        )
+        return [mappers.meeting(r) for r in rows]
+
+    async def delete_all(self, *, user_id: UUID) -> int:
+        # Every child table (note_lines, audio_chunks, transcript_segments, speakers, enhanced_notes, jobs, and any
+        # later table keyed by meeting_id) references meetings ON DELETE CASCADE.
+        return _rowcount(await self._s.execute(delete(MeetingRow).where(MeetingRow.user_id == user_id)))
 
 
 class SqlNoteRepository:
@@ -388,7 +430,9 @@ class SqlSearchRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._s = session
 
-    async def search(self, *, user_id: UUID, query: str, folder_id: UUID | None, limit: int) -> list[SearchHit]:
+    async def search(
+        self, *, user_id: UUID, query: str, folder_id: UUID | None, limit: int, meeting_id: UUID | None = None
+    ) -> list[SearchHit]:
         tsquery_text = tsquery_for(query)
         pattern = like_pattern(query)
         tsq = func.to_tsquery(SIMPLE_TS_CONFIG, tsquery_text) if tsquery_text else None
@@ -425,6 +469,8 @@ class SqlSearchRepository:
                 MeetingRow.created_at.label("created_at"),
                 rank(text).label("rank"),
             ).where(MeetingRow.user_id == user_id, match(text))
+            if meeting_id is not None:
+                stmt = stmt.where(MeetingRow.id == meeting_id)
             return stmt.where(MeetingRow.folder_id == folder_id) if folder_id is not None else stmt
 
         no_int = sql_cast(null(), Integer)
@@ -465,6 +511,51 @@ class SqlSearchRepository:
             select(hits).order_by(hits.c.rank.desc(), hits.c.created_at.desc(), hits.c.start_ms).limit(limit)
         )
         return [SearchHit.model_validate(dict(r)) for r in rows.mappings()]
+
+
+class SqlShareRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def create(
+        self, *, meeting_id: UUID, user_id: UUID, token: str, include_transcript: bool, expires_at: datetime
+    ) -> Share:
+        row = ShareRow(
+            meeting_id=meeting_id,
+            user_id=user_id,
+            token=token,
+            include_transcript=include_transcript,
+            expires_at=expires_at,
+        )
+        self._s.add(row)
+        await self._s.flush()
+        await self._s.refresh(row)
+        return mappers.share(row)
+
+    async def get_active(self, *, user_id: UUID, meeting_id: UUID, now: datetime) -> Share | None:
+        row = await self._s.scalar(
+            select(ShareRow).where(
+                ShareRow.meeting_id == meeting_id,
+                ShareRow.user_id == user_id,
+                ShareRow.revoked_at.is_(None),
+                ShareRow.expires_at > now,
+            )
+        )
+        return mappers.share(row) if row else None
+
+    async def get_by_token(self, *, token: str, now: datetime) -> Share | None:
+        row = await self._s.scalar(
+            select(ShareRow).where(ShareRow.token == token, ShareRow.revoked_at.is_(None), ShareRow.expires_at > now)
+        )
+        return mappers.share(row) if row else None
+
+    async def revoke_active(self, *, user_id: UUID, meeting_id: UUID, now: datetime) -> int:
+        result = await self._s.execute(
+            update(ShareRow)
+            .where(ShareRow.meeting_id == meeting_id, ShareRow.user_id == user_id, ShareRow.revoked_at.is_(None))
+            .values(revoked_at=now)
+        )
+        return _rowcount(result)
 
 
 _ACTIVE = (JobStatus.QUEUED.value, JobStatus.RUNNING.value)

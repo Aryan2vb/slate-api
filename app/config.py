@@ -2,7 +2,7 @@ from functools import lru_cache
 from typing import Literal
 from uuid import UUID
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +28,14 @@ class Settings(BaseSettings):
 
     storage_bucket: str = "meeting-audio"
     upload_url_ttl_s: int = 900
+    # Days the assembled recording is kept after transcription, for playback (GET /meetings/{id}/audio). 0 deletes
+    # it as soon as the transcript is saved. Expired recordings are purged by the job worker about once an hour.
+    audio_retention_days: int = Field(default=7, ge=0)
+
+    # Public origin of this API, used to build share links ({public_base_url}/s/{token}). No trailing slash.
+    # Production (Render) must set PUBLIC_BASE_URL=https://slate-api-2bxe.onrender.com.
+    public_base_url: str = "http://localhost:8000"
+    share_ttl_days: int = Field(default=30, ge=1)  # a share link stops working this many days after it is created
 
     stt_provider: Literal["deepgram", "groq", "fake"] = "deepgram"
     deepgram_api_key: SecretStr = SecretStr("")
@@ -59,6 +67,13 @@ class Settings(BaseSettings):
     rate_limit_catchup_per_hour: int = 60  # catch-up (LLM)
     rate_limit_client_logs_per_hour: int = 720  # app log batches (one every ~5 s at most)
     rate_limit_search_per_hour: int = 600  # search (Postgres only; generous for search-as-you-type)
+    rate_limit_ask_per_hour: int = 120  # Ask Slate (search + LLM)
+    rate_limit_share_views_per_hour: int = 300  # public share pages (/s/{token}), per client IP
+
+    @field_validator("public_base_url")
+    @classmethod
+    def _strip_trailing_slash(cls, value: str) -> str:
+        return value.rstrip("/")
 
     @property
     def resolved_log_format(self) -> Literal["console", "json"]:

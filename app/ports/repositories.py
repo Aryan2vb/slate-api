@@ -23,6 +23,7 @@ from app.domain.models import (
     MeetingStatus,
     NoteLine,
     SearchHit,
+    Share,
     Speaker,
     TemplateKind,
     TranscriptSegment,
@@ -57,6 +58,10 @@ class FolderRepository(Protocol):
 
     async def delete(self, *, user_id: UUID, folder_id: UUID) -> bool:
         """Its meetings stay, unfiled (folder_id becomes NULL)."""
+        ...
+
+    async def delete_all(self, *, user_id: UUID) -> int:
+        """Deletes every folder of the user (account deletion). Returns how many were removed."""
         ...
 
 
@@ -94,7 +99,25 @@ class MeetingRepository(Protocol):
 
     async def set_status(self, *, meeting_id: UUID, status: MeetingStatus) -> None: ...
     async def set_languages(self, *, meeting_id: UUID, languages: Sequence[str]) -> None: ...
+    async def set_audio(
+        self, *, meeting_id: UUID, path: str | None, expires_at: datetime | None, duration_ms: int | None
+    ) -> None:
+        """Records the kept recording; all None clears it."""
+        ...
+
+    async def list_expired_audio(self, *, now: datetime, limit: int) -> list[Meeting]:
+        """Meetings (any user) whose kept recording expired at or before `now`, oldest expiry first."""
+        ...
+
+    async def clear_audio(self, *, meeting_ids: Sequence[UUID]) -> None: ...
     async def delete(self, *, user_id: UUID, meeting_id: UUID) -> bool: ...
+    async def list_all(self, *, user_id: UUID) -> list[Meeting]:
+        """Every meeting of the user, oldest first (export and account deletion)."""
+        ...
+
+    async def delete_all(self, *, user_id: UUID) -> int:
+        """Deletes every meeting of the user; their child rows go with them (ON DELETE CASCADE). Returns the count."""
+        ...
 
 
 class NoteRepository(Protocol):
@@ -150,11 +173,31 @@ class JobRepository(Protocol):
     async def list_for_meeting(self, *, meeting_id: UUID) -> list[Job]: ...
 
 
+class ShareRepository(Protocol):
+    async def create(
+        self, *, meeting_id: UUID, user_id: UUID, token: str, include_transcript: bool, expires_at: datetime
+    ) -> Share: ...
+    async def get_active(self, *, user_id: UUID, meeting_id: UUID, now: datetime) -> Share | None:
+        """The meeting's unrevoked, unexpired share, if the meeting is the user's."""
+        ...
+
+    async def get_by_token(self, *, token: str, now: datetime) -> Share | None:
+        """The share behind a public link; None when unknown, revoked or expired."""
+        ...
+
+    async def revoke_active(self, *, user_id: UUID, meeting_id: UUID, now: datetime) -> int:
+        """Revokes every unrevoked share of the meeting (expired ones too). Returns how many."""
+        ...
+
+
 class SearchRepository(Protocol):
-    async def search(self, *, user_id: UUID, query: str, folder_id: UUID | None, limit: int) -> list[SearchHit]:
+    async def search(
+        self, *, user_id: UUID, query: str, folder_id: UUID | None, limit: int, meeting_id: UUID | None = None
+    ) -> list[SearchHit]:
         """The user's note lines, transcript segments and enhanced-note blocks matching `query`.
 
-        Best match first, then the most recent meeting. `query` is already trimmed and non-empty.
+        Best match first, then the most recent meeting. `query` is already trimmed and non-empty. `meeting_id`
+        narrows the search to one meeting (already verified as the user's).
         """
         ...
 
@@ -184,6 +227,8 @@ class UnitOfWork(Protocol):
     def jobs(self) -> JobRepository: ...
     @property
     def search(self) -> SearchRepository: ...
+    @property
+    def shares(self) -> ShareRepository: ...
 
     async def __aenter__(self) -> Self: ...
     async def __aexit__(self, *exc: object) -> None: ...

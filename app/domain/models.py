@@ -81,8 +81,16 @@ class Meeting(_Model):
     attendees: list[Attendee] = Field(default_factory=list)
     languages: list[str] = Field(default_factory=list)  # detected from the recording; empty until transcribed
     started_at: datetime | None = None
+    # The assembled recording kept for playback after transcription (None once deleted, or when not kept).
+    audio_path: str | None = None
+    audio_expires_at: datetime | None = None
+    audio_duration_ms: int | None = None
     created_at: datetime
     updated_at: datetime
+
+    def has_audio(self, now: datetime) -> bool:
+        """Whether a kept recording can still be played (it may linger in storage until the hourly purge)."""
+        return self.audio_path is not None and self.audio_expires_at is not None and self.audio_expires_at > now
 
 
 class NoteLine(_Model):
@@ -180,6 +188,25 @@ class EnhancedNotes(_Model):
     action_items: list[ActionItem] = Field(default_factory=list)
     decisions: list[str] = Field(default_factory=list)
     open_questions: list[str] = Field(default_factory=list)
+
+
+# --- Sharing --------------------------------------------------------------------------------------------------
+
+
+class Share(_Model):
+    """A public read-only link to one meeting's notes. At most one is active per meeting; creating again rotates."""
+
+    id: UUID
+    meeting_id: UUID
+    user_id: UUID
+    token: str
+    include_transcript: bool = False
+    created_at: datetime
+    expires_at: datetime
+    revoked_at: datetime | None = None
+
+    def is_active(self, now: datetime) -> bool:
+        return self.revoked_at is None and self.expires_at > now
 
 
 # --- Search ---------------------------------------------------------------------------------------------------

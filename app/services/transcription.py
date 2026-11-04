@@ -1,9 +1,12 @@
-"""Turns a meeting's uploaded audio chunks into a stored, diarized transcript, then deletes the audio."""
+"""Turns a meeting's uploaded audio chunks into a stored, diarized transcript, then deletes the chunks.
+
+With audio retention on, the assembled recording is kept (one object per meeting) for playback until it expires."""
 
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import structlog
@@ -13,6 +16,7 @@ from app.domain.models import ChunkStatus, Meeting, MeetingStatus, NoteLine, Tra
 from app.domain.vocabulary import dedupe_terms, jargon_terms
 from app.ports.providers import AudioAssembler, ObjectStorage, SpeechToText, TranscriptionOptions
 from app.ports.repositories import UnitOfWorkFactory
+from app.services.audio import kept_audio_path
 
 log = structlog.get_logger()
 
@@ -68,12 +72,21 @@ def build_keyterms(meeting: Meeting, notes: Sequence[NoteLine] = (), vocabulary:
 
 class TranscriptionService:
     def __init__(
-        self, uow: UnitOfWorkFactory, storage: ObjectStorage, audio: AudioAssembler, stt: SpeechToText
+        self,
+        uow: UnitOfWorkFactory,
+        storage: ObjectStorage,
+        audio: AudioAssembler,
+        stt: SpeechToText,
+        *,
+        audio_retention_days: int = 0,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._uow = uow
         self._storage = storage
         self._audio = audio
         self._stt = stt
+        self._audio_retention_days = audio_retention_days  # 0: delete the recording as soon as it is transcribed
+        self._clock = clock
 
     async def transcribe(self, *, user_id: UUID, meeting_id: UUID) -> Transcript:
         async with self._uow() as uow:
@@ -110,6 +123,9 @@ class TranscriptionService:
             await uow.meetings.set_languages(meeting_id=meeting_id, languages=transcript.languages)
             await uow.commit()
 
+        if self._audio_retention_days > 0:
+            await self._keep_audio(user_id, meeting_id, audio, mime_type, transcript)
+
         # Audio is deleted only once the transcript is durably saved. A failed delete leaves orphaned objects,
         # which is a cleanup problem, not a reason to redo a transcription that already succeeded.
         try:
@@ -121,3 +137,33 @@ class TranscriptionService:
                 await uow.chunks.mark_deleted(meeting_id=meeting_id)
                 await uow.commit()
         return transcript
+
+    async def _keep_audio(
+        self, user_id: UUID, meeting_id: UUID, audio: bytes, mime_type: str, transcript: Transcript
+    ) -> None:
+        """Stores the assembled recording for playback. Playback is a nicety: a failure here is logged, and the
+        transcription still succeeds (the chunks are deleted as usual)."""
+        path = kept_audio_path(user_id, meeting_id)
+        expires_at = self._clock() + timedelta(days=self._audio_retention_days)
+        duration_ms = transcript.duration_ms or max((s.end_ms for s in transcript.segments), default=None)
+        try:
+            await self._storage.upload(path, audio, mime_type)
+            async with self._uow() as uow:
+                still_there = await uow.meetings.get(user_id=user_id, meeting_id=meeting_id) is not None
+                if still_there:
+                    await uow.meetings.set_audio(
+                        meeting_id=meeting_id, path=path, expires_at=expires_at, duration_ms=duration_ms
+                    )
+                    await uow.commit()
+            if not still_there:  # deleted while transcribing: nothing would ever clean this object up
+                await self._storage.delete([path])
+                return
+        except Exception as exc:
+            log.warning("transcription.audio_keep_failed", meeting_id=str(meeting_id), error=str(exc))
+            return
+        log.info(
+            "transcription.audio_kept",
+            meeting_id=str(meeting_id),
+            bytes=len(audio),
+            expires_at=expires_at.isoformat(),
+        )

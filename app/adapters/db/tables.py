@@ -94,6 +94,10 @@ class MeetingRow(Base):
     attendees: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     languages: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The recording kept for playback after transcription; set together and cleared together.
+    audio_path: Mapped[str | None] = mapped_column(Text)
+    audio_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    audio_duration_ms: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = _updated()
 
@@ -101,6 +105,12 @@ class MeetingRow(Base):
         UniqueConstraint("user_id", "calendar_event_id"),
         Index("ix_meetings_user_created", "user_id", "created_at"),
         Index("ix_meetings_folder_created", "folder_id", "created_at"),
+        # Partial: only meetings with kept audio, which is what the hourly purge scans.
+        Index(
+            "ix_meetings_audio_expires_at",
+            "audio_expires_at",
+            postgresql_where=sa_text("audio_expires_at IS NOT NULL"),
+        ),
     )
 
 
@@ -172,6 +182,28 @@ class EnhancedNotesRow(Base):
     # to_tsvector(regconfig, jsonb) indexes every string value of the document. Search uses it to find candidate
     # documents, then matches the individual blocks (sections[].blocks[].text) of those few.
     __table_args__ = (_fts_index("ix_enhanced_notes_content_fts", "content"),)
+
+
+class ShareRow(Base):
+    __tablename__ = "shares"
+    id: Mapped[uuid.UUID] = _id()
+    meeting_id: Mapped[uuid.UUID] = _meeting_fk()
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    token: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)  # the unique index serves lookups
+    include_transcript: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = _created()
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # At most one unrevoked share per meeting; also the index behind "the meeting's current share".
+    __table_args__ = (
+        Index(
+            "uq_shares_meeting_unrevoked",
+            "meeting_id",
+            unique=True,
+            postgresql_where=sa_text("revoked_at IS NULL"),
+        ),
+    )
 
 
 class JobRow(Base):

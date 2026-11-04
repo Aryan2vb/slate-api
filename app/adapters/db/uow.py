@@ -14,6 +14,7 @@ from app.adapters.db.repositories import (
     SqlMeetingRepository,
     SqlNoteRepository,
     SqlSearchRepository,
+    SqlShareRepository,
     SqlSpeakerRepository,
     SqlTranscriptRepository,
 )
@@ -30,6 +31,7 @@ class SqlAlchemyUnitOfWork:
     enhanced: SqlEnhancedNotesRepository
     jobs: SqlJobRepository
     search: SqlSearchRepository
+    shares: SqlShareRepository
 
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         self._sessionmaker = sessionmaker
@@ -47,6 +49,7 @@ class SqlAlchemyUnitOfWork:
         self.enhanced = SqlEnhancedNotesRepository(session)
         self.jobs = SqlJobRepository(session)
         self.search = SqlSearchRepository(session)
+        self.shares = SqlShareRepository(session)
         return self
 
     async def __aexit__(self, *exc: object) -> None:

@@ -6,7 +6,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.errors import install_error_handlers
 from app.api.middleware import RequestLogMiddleware
+from app.api.routes import ask as ask_routes
+from app.api.routes import audio as audio_routes
 from app.api.routes import auth_return, client_logs, folders, health, meetings, notes, processing, search, uploads
+from app.api.routes import me as me_routes
+from app.api.routes import shares as share_routes
 from app.config import get_settings
 from app.container import Container, build_container
 from app.jobs.runner import start_worker, stop_worker
@@ -54,4 +58,8 @@ def create_app(container: Container | None = None) -> FastAPI:
     app.include_router(processing.router)
     app.include_router(client_logs.router)
     app.include_router(search.router)
+    app.include_router(ask_routes.router)
+    app.include_router(me_routes.router)
+    app.include_router(share_routes.router)
+    app.include_router(audio_routes.router)
     return app

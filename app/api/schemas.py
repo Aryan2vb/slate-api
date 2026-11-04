@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any, Self
 from uuid import UUID
 
@@ -23,6 +23,7 @@ from app.domain.models import (
     NoteLine,
     SearchHit,
     SearchKind,
+    Share,
     TemplateKind,
 )
 from app.ports.providers import SignedUpload
@@ -172,6 +173,18 @@ class JobOut(_Out):
     updated_at: datetime
 
 
+class AudioStatusOut(_Out):
+    """Whether the recording is kept for playback (GET /meetings/{id}/audio), and until when."""
+
+    available: bool = False
+    expires_at: datetime | None = None
+
+    @classmethod
+    def of(cls, m: Meeting) -> AudioStatusOut:
+        available = m.has_audio(datetime.now(UTC))
+        return cls(available=available, expires_at=m.audio_expires_at if available else None)
+
+
 class MeetingDetailOut(_Out):
     meeting: MeetingOut
     stage: Stage
@@ -180,6 +193,7 @@ class MeetingDetailOut(_Out):
     speakers: list[SpeakerOut]
     enhanced: EnhancedNotes | None
     jobs: list[JobOut]
+    audio: AudioStatusOut = Field(default_factory=AudioStatusOut)
 
     @classmethod
     def of(cls, d: MeetingDetail) -> MeetingDetailOut:
@@ -191,6 +205,7 @@ class MeetingDetailOut(_Out):
             speakers=[SpeakerOut.model_validate(x) for x in d.speakers],
             enhanced=d.enhanced,
             jobs=[JobOut.model_validate(x) for x in d.jobs],
+            audio=AudioStatusOut.of(d.meeting),
         )
 
 
@@ -275,3 +290,28 @@ class SearchOut(_Out):
     @classmethod
     def of(cls, hits: list[SearchHit]) -> SearchOut:
         return cls(items=[SearchResultOut.model_validate(h) for h in hits])
+
+
+# --- Sharing and kept audio -----------------------------------------------------------------------------------
+
+
+class CreateShareIn(_In):
+    include_transcript: bool = False
+
+
+class ShareOut(_Out):
+    url: str
+    token: str
+    include_transcript: bool
+    expires_at: datetime
+
+    @classmethod
+    def of(cls, share: Share, url: str) -> ShareOut:
+        return cls(url=url, token=share.token, include_transcript=share.include_transcript, expires_at=share.expires_at)
+
+
+class AudioPlaybackOut(_Out):
+    url: str  # signed; anyone holding it can download the recording until url_expires_at
+    url_expires_at: datetime
+    expires_at: datetime  # when the kept recording is deleted
+    duration_ms: int | None

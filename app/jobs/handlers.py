@@ -67,7 +67,14 @@ def build_handlers(container: Container) -> Mapping[JobKind, JobHandler]:
     uow = container.uow
     return {
         JobKind.TRANSCRIBE: TranscribeHandler(
-            TranscriptionService(uow, container.storage, container.audio, container.stt), uow
+            TranscriptionService(
+                uow,
+                container.storage,
+                container.audio,
+                container.stt,
+                audio_retention_days=container.settings.audio_retention_days,
+            ),
+            uow,
         ),
         JobKind.SPEAKERS: SpeakersHandler(SpeakerService(uow, container.llm), uow),
         JobKind.ENHANCE: EnhanceHandler(EnhancementService(uow, container.llm)),

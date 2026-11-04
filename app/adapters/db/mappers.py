@@ -7,6 +7,7 @@ from app.adapters.db.tables import (
     JobRow,
     MeetingRow,
     NoteLineRow,
+    ShareRow,
     SpeakerRow,
     TranscriptSegmentRow,
 )
@@ -17,6 +18,7 @@ from app.domain.models import (
     Job,
     Meeting,
     NoteLine,
+    Share,
     Speaker,
     TranscriptSegment,
 )
@@ -52,3 +54,7 @@ def enhanced_notes(row: EnhancedNotesRow) -> EnhancedNotes:
 
 def job(row: JobRow) -> Job:
     return Job.model_validate(row)
+
+
+def share(row: ShareRow) -> Share:
+    return Share.model_validate(row)

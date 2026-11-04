@@ -1,10 +1,12 @@
-"""Polls the jobs table and dispatches each job to its handler, with retry/backoff and stale-lock recovery."""
+"""Polls the jobs table and dispatches each job to its handler, with retry/backoff and stale-lock recovery.
+
+Between polls it also runs periodic housekeeping: purging kept recordings whose retention expired."""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime, timedelta
 
 import structlog
@@ -14,12 +16,14 @@ from app.domain.errors import DomainError, ProviderError
 from app.domain.models import Job, JobKind, MeetingStatus
 from app.jobs.handlers import JobHandler, build_handlers
 from app.ports.repositories import UnitOfWorkFactory
+from app.services.audio import AudioService
 
 log = structlog.get_logger()
 
 BASE_BACKOFF = timedelta(seconds=30)
 MAX_BACKOFF = timedelta(minutes=15)
 RECLAIM_EVERY = timedelta(seconds=60)
+PURGE_AUDIO_EVERY = timedelta(hours=1)
 
 
 def backoff(attempts: int) -> timedelta:
@@ -47,6 +51,7 @@ class JobRunner:
         poll_interval_s: float,
         stale_after_s: int,
         clock: Callable[[], datetime] = _utcnow,
+        purge_audio: Callable[[], Awaitable[int]] | None = None,
     ) -> None:
         self._uow = uow
         self._handlers = handlers
@@ -55,6 +60,8 @@ class JobRunner:
         self._clock = clock
         self._stopping = asyncio.Event()
         self._last_reclaim: datetime | None = None
+        self._purge_audio = purge_audio
+        self._last_purge: datetime | None = None
 
     @classmethod
     def from_container(cls, container: Container) -> JobRunner:
@@ -64,6 +71,7 @@ class JobRunner:
             build_handlers(container),
             poll_interval_s=s.worker_poll_interval_s,
             stale_after_s=s.job_stale_after_s,
+            purge_audio=AudioService(container.uow, container.storage).purge_expired,
         )
 
     def stop(self) -> None:
@@ -73,6 +81,7 @@ class JobRunner:
     async def run_forever(self) -> None:
         log.info("worker.started", poll_interval_s=self._poll_interval_s)
         while not self._stopping.is_set():
+            await self.run_maintenance()
             try:
                 processed = await self.run_once()
             except Exception as exc:  # the loop must survive DB outages; the next poll retries
@@ -82,6 +91,20 @@ class JobRunner:
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(self._stopping.wait(), timeout=self._poll_interval_s)
         log.info("worker.stopped")
+
+    async def run_maintenance(self) -> None:
+        """Periodic housekeeping, due at most once per interval. A failed step is logged and retried next interval
+        (every step is idempotent), and never stops the job loop."""
+        if self._purge_audio is None:
+            return
+        now = self._clock()
+        if self._last_purge is not None and now - self._last_purge < PURGE_AUDIO_EVERY:
+            return
+        self._last_purge = now
+        try:
+            await self._purge_audio()
+        except Exception as exc:
+            log.error("worker.audio_purge_failed", error=str(exc))
 
     async def run_once(self) -> bool:
         """Claims and runs at most one job. Returns whether a job was found."""

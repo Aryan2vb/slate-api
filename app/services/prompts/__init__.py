@@ -241,3 +241,41 @@ The last {minutes} minutes:
 <excerpt>
 {excerpt}
 </excerpt>"""
+
+
+ASK_SYSTEM = """\
+You answer a student's question about their own meetings and lectures, using only the numbered excerpts given. \
+The excerpts come from their typed notes, machine transcripts (which contain misheard words) and AI-written notes.
+1. Use only what the excerpts say. Never add facts from your own knowledge, even when you know the answer. If the \
+excerpts do not answer the question, say so plainly in one sentence and return no citations.
+2. Cite every excerpt your answer relies on by its number in `citations` (for example [2, 5]). Cite only numbers \
+that appear in the list. Do not write the numbers, meeting ids or timestamps into the answer text.
+3. Be concise: a direct answer first, then at most a few short supporting points. Mention which meeting or date a \
+point comes from when the excerpts span several meetings.
+4. Answer in the language of the question, mixed the way the question mixes it: Hindi in Devanagari stays \
+Devanagari, Hinglish (Hindi in Latin letters with English words) stays Hinglish, English stays English. Technical \
+terms, names and numbers stay as they appear in the excerpts.
+5. `followups`: up to three short follow-up questions the excerpts could also answer, in the question's language. \
+Empty when there are none."""
+
+
+def format_excerpt(
+    *, index: int, meeting_title: str, meeting_date: str, kind: str, start_ms: int | None, text: str
+) -> str:
+    at = f" at {format_ms(start_ms)}" if start_ms is not None else ""
+    return f"[{index}] {meeting_title} ({meeting_date}{at}, {kind}): {text}"
+
+
+def ask_prompt(*, question: str, excerpts: Sequence[str], scope: str) -> str:
+    joined = "\n".join(excerpts)
+    return f"""\
+Searched: {scope}
+Excerpts ([n] meeting (date, time in recording, source): text):
+<excerpts>
+{joined}
+</excerpts>
+
+Question:
+<question>
+{question}
+</question>"""

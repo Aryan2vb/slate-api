@@ -33,6 +33,7 @@ from app.domain.models import (
     NoteLine,
     SearchHit,
     SearchKind,
+    Share,
     Speaker,
     TemplateKind,
     Transcript,
@@ -56,6 +57,7 @@ class InMemoryState:
     speakers: dict[tuple[UUID, int], Speaker] = field(default_factory=dict)
     enhanced: dict[UUID, tuple[EnhancedNotes, str]] = field(default_factory=dict)
     jobs: dict[UUID, Job] = field(default_factory=dict)
+    shares: dict[UUID, Share] = field(default_factory=dict)
 
 
 class _Folders:
@@ -103,6 +105,12 @@ class _Folders:
             if m.folder_id == folder_id:
                 self.s.meetings[m.id] = m.model_copy(update={"folder_id": None})
         return True
+
+    async def delete_all(self, *, user_id: UUID) -> int:
+        mine = [f.id for f in self.s.folders.values() if f.user_id == user_id]
+        for folder_id in mine:
+            await self.delete(user_id=user_id, folder_id=folder_id)
+        return len(mine)
 
 
 class _Meetings:
@@ -178,11 +186,43 @@ class _Meetings:
         m = self.s.meetings[meeting_id]
         self.s.meetings[meeting_id] = m.model_copy(update={"languages": list(languages), "updated_at": _now()})
 
+    async def set_audio(
+        self, *, meeting_id: UUID, path: str | None, expires_at: datetime | None, duration_ms: int | None
+    ) -> None:
+        m = self.s.meetings.get(meeting_id)
+        if m is not None:  # an UPDATE of a missing row is a no-op
+            update = {"audio_path": path, "audio_expires_at": expires_at, "audio_duration_ms": duration_ms}
+            self.s.meetings[meeting_id] = m.model_copy(update=update)
+
+    async def list_expired_audio(self, *, now: datetime, limit: int) -> list[Meeting]:
+        expired = [m for m in self.s.meetings.values() if m.audio_expires_at is not None and m.audio_expires_at <= now]
+        return sorted(expired, key=lambda m: m.audio_expires_at or now)[:limit]
+
+    async def clear_audio(self, *, meeting_ids: Sequence[UUID]) -> None:
+        for meeting_id in meeting_ids:
+            await self.set_audio(meeting_id=meeting_id, path=None, expires_at=None, duration_ms=None)
+
     async def delete(self, *, user_id: UUID, meeting_id: UUID) -> bool:
         if await self.get(user_id=user_id, meeting_id=meeting_id) is None:
             return False
         del self.s.meetings[meeting_id]
         return True
+
+    async def list_all(self, *, user_id: UUID) -> list[Meeting]:
+        return sorted((m for m in self.s.meetings.values() if m.user_id == user_id), key=lambda m: m.created_at)
+
+    async def delete_all(self, *, user_id: UUID) -> int:
+        """Cascades to every child row, like ON DELETE CASCADE in Postgres: any store keyed by meeting id, keyed by
+        (meeting id, ...), or holding values with a `meeting_id` (so stores added later cascade too)."""
+        mine = {m.id for m in self.s.meetings.values() if m.user_id == user_id}
+        for store in vars(self.s).values():
+            if not isinstance(store, dict):
+                continue
+            for key, value in list(store.items()):
+                owner = key[0] if isinstance(key, tuple) else getattr(value, "meeting_id", key)
+                if owner in mine:
+                    del store[key]
+        return len(mine)
 
 
 class _Notes:
@@ -341,11 +381,15 @@ class _Search:
     def __init__(self, s: InMemoryState) -> None:
         self.s = s
 
-    async def search(self, *, user_id: UUID, query: str, folder_id: UUID | None, limit: int) -> list[SearchHit]:
+    async def search(
+        self, *, user_id: UUID, query: str, folder_id: UUID | None, limit: int, meeting_id: UUID | None = None
+    ) -> list[SearchHit]:
         needle = query.casefold()
         hits: list[SearchHit] = []
         for m in self.s.meetings.values():
             if m.user_id != user_id or (folder_id is not None and m.folder_id != folder_id):
+                continue
+            if meeting_id is not None and m.id != meeting_id:
                 continue
             base = {"meeting_id": m.id, "meeting_title": m.title, "folder_id": m.folder_id, "created_at": m.created_at}
             for n in self.s.notes.get(m.id, []):
@@ -380,6 +424,51 @@ class _Search:
         return sorted(hits, key=lambda h: (h.rank, h.created_at), reverse=True)[:limit]
 
 
+class _Shares:
+    def __init__(self, s: InMemoryState) -> None:
+        self.s = s
+
+    async def create(
+        self, *, meeting_id: UUID, user_id: UUID, token: str, include_transcript: bool, expires_at: datetime
+    ) -> Share:
+        assert not any(  # the partial unique index: one unrevoked share per meeting
+            x.meeting_id == meeting_id and x.revoked_at is None for x in self.s.shares.values()
+        ), "meeting already has an unrevoked share"
+        assert all(x.token != token for x in self.s.shares.values()), "duplicate share token"
+        share = Share(
+            id=uuid.uuid4(),
+            meeting_id=meeting_id,
+            user_id=user_id,
+            token=token,
+            include_transcript=include_transcript,
+            created_at=_now(),
+            expires_at=expires_at,
+        )
+        self.s.shares[share.id] = share
+        return share
+
+    async def get_active(self, *, user_id: UUID, meeting_id: UUID, now: datetime) -> Share | None:
+        return next(
+            (
+                x
+                for x in self.s.shares.values()
+                if x.meeting_id == meeting_id and x.user_id == user_id and x.is_active(now)
+            ),
+            None,
+        )
+
+    async def get_by_token(self, *, token: str, now: datetime) -> Share | None:
+        return next((x for x in self.s.shares.values() if x.token == token and x.is_active(now)), None)
+
+    async def revoke_active(self, *, user_id: UUID, meeting_id: UUID, now: datetime) -> int:
+        n = 0
+        for x in list(self.s.shares.values()):
+            if x.meeting_id == meeting_id and x.user_id == user_id and x.revoked_at is None:
+                self.s.shares[x.id] = x.model_copy(update={"revoked_at": now})
+                n += 1
+        return n
+
+
 class InMemoryUnitOfWork:
     """Shares state across units of work. Commit is a no-op: tests assert on state, not transactions."""
 
@@ -393,6 +482,7 @@ class InMemoryUnitOfWork:
         self.enhanced = _Enhanced(state)
         self.jobs = _Jobs(state)
         self.search = _Search(state)
+        self.shares = _Shares(state)
         self.committed = False
 
     async def __aenter__(self) -> Self:
@@ -432,6 +522,7 @@ class FakeAuth:
 class FakeStorage:
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
+        self.content_types: dict[str, str] = {}
         self.deleted: list[str] = []
 
     async def create_upload_url(self, path: str, *, overwrite: bool = False) -> SignedUpload:
@@ -442,10 +533,26 @@ class FakeStorage:
             raise NotFoundError(path)
         return self.objects[path]
 
+    async def upload(self, path: str, data: bytes, content_type: str) -> None:
+        self.objects[path] = data
+        self.content_types[path] = content_type
+
+    async def create_download_url(self, path: str, ttl_s: int) -> str:
+        if path not in self.objects:
+            raise NotFoundError(path)
+        return f"https://storage.test/download/{path}?ttl={ttl_s}"
+
     async def delete(self, paths: Sequence[str]) -> None:
         for p in paths:
             self.objects.pop(p, None)
             self.deleted.append(p)
+
+    async def delete_prefix(self, prefix: str) -> int:
+        folder = prefix.strip("/")
+        assert folder, "delete_prefix needs a non-empty prefix"
+        matching = [p for p in self.objects if p.startswith(f"{folder}/")]
+        await self.delete(matching)
+        return len(matching)
 
 
 class FakeAudio:

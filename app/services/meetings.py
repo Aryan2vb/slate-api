@@ -78,6 +78,21 @@ async def require_meeting(uow: UnitOfWork, *, user_id: UUID, meeting_id: UUID) -
     return meeting
 
 
+async def load_detail(uow: UnitOfWork, *, user_id: UUID, meeting_id: UUID) -> MeetingDetail:
+    """Everything about one of the user's meetings, read inside the caller's unit of work."""
+    meeting = await require_meeting(uow, user_id=user_id, meeting_id=meeting_id)
+    jobs = await uow.jobs.list_for_meeting(meeting_id=meeting_id)
+    return MeetingDetail(
+        meeting=meeting,
+        notes=await uow.notes.list(meeting_id=meeting_id),
+        transcript=await uow.transcripts.list(meeting_id=meeting_id),
+        speakers=await uow.speakers.list(meeting_id=meeting_id),
+        enhanced=await uow.enhanced.get(meeting_id=meeting_id),
+        jobs=jobs,
+        stage=derive_stage(meeting, jobs),
+    )
+
+
 class MeetingService:
     def __init__(self, uow: UnitOfWorkFactory, storage: ObjectStorage) -> None:
         self._uow = uow
@@ -147,22 +162,14 @@ class MeetingService:
 
     async def detail(self, *, user_id: UUID, meeting_id: UUID) -> MeetingDetail:
         async with self._uow() as uow:
-            meeting = await require_meeting(uow, user_id=user_id, meeting_id=meeting_id)
-            jobs = await uow.jobs.list_for_meeting(meeting_id=meeting_id)
-            return MeetingDetail(
-                meeting=meeting,
-                notes=await uow.notes.list(meeting_id=meeting_id),
-                transcript=await uow.transcripts.list(meeting_id=meeting_id),
-                speakers=await uow.speakers.list(meeting_id=meeting_id),
-                enhanced=await uow.enhanced.get(meeting_id=meeting_id),
-                jobs=jobs,
-                stage=derive_stage(meeting, jobs),
-            )
+            return await load_detail(uow, user_id=user_id, meeting_id=meeting_id)
 
     async def delete(self, *, user_id: UUID, meeting_id: UUID) -> None:
         async with self._uow() as uow:
-            await require_meeting(uow, user_id=user_id, meeting_id=meeting_id)
+            meeting = await require_meeting(uow, user_id=user_id, meeting_id=meeting_id)
             paths = [c.storage_path for c in await uow.chunks.list(meeting_id=meeting_id)]
+            if meeting.audio_path:  # the recording kept for playback
+                paths.append(meeting.audio_path)
             await uow.meetings.delete(user_id=user_id, meeting_id=meeting_id)
             await uow.commit()
         log.info("meeting.deleted", meeting_id=str(meeting_id), audio_objects=len(paths))
