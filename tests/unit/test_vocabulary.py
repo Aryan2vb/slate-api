@@ -32,3 +32,7 @@ def test_suggest_terms_ranks_by_frequency_and_excludes_known() -> None:
     assert suggest_terms(lines, limit=1) == [("LALR", 3)]
     # The most common spelling wins.
     assert suggest_terms(["GraphQL", "GRAPHQL", "GRAPHQL"]) == [("GRAPHQL", 3)]
+
+
+def test_suggest_terms_with_zero_limit_returns_no_suggestions() -> None:
+    assert suggest_terms(["LR(1)", "DFA"], limit=0) == []
