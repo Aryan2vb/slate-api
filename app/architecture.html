@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Slate API — Architecture</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;family=Space+Grotesk:wght@500;600;700&amp;display=swap" rel="stylesheet">
+  <style>
+    :root { --bg:#f3f5f7; --surface:#fff; --text:#19232d; --muted:#596878; --line:#d9e0e7; --blue:#216889; --blue-soft:#e4f0f5; --gold:#966a12; --gold-soft:#f7efdc; --green:#25734a; --code:#eef2f5; --display:"Space Grotesk",system-ui,sans-serif; --body:"IBM Plex Sans",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,monospace; }
+    @media (prefers-color-scheme: dark) { :root { --bg:#11181f; --surface:#19232d; --text:#e4ebf1; --muted:#a4b2c0; --line:#2c3945; --blue:#80bcdb; --blue-soft:#1c3341; --gold:#e1b75e; --gold-soft:#302719; --green:#72c99a; --code:#202c36; } }
+    * { box-sizing:border-box; } html { scroll-behavior:smooth; } body { margin:0; padding:0 20px 64px; color:var(--text); background:var(--bg); font:15.5px/1.6 var(--body); }
+    .shell { max-width:1240px; margin:auto; display:grid; grid-template-columns:220px minmax(0,1fr); gap:48px; }
+    nav { position:sticky; top:0; align-self:start; max-height:100vh; overflow:auto; padding:40px 0; } nav p { font:11px var(--mono); color:var(--muted); letter-spacing:.08em; text-transform:uppercase; margin:0 0 10px; } nav a { display:block; color:var(--text); text-decoration:none; padding:5px 8px; border-radius:6px; font-size:13.5px; } nav a:hover { background:var(--blue-soft); color:var(--blue); }
+    main { min-width:0; padding-top:40px; } header { border-bottom:1px solid var(--line); padding-bottom:30px; } .eyebrow,.tag { color:var(--gold); font:12px var(--mono); letter-spacing:.08em; text-transform:uppercase; } h1,h2,h3 { font-family:var(--display); line-height:1.16; } h1 { font-size:clamp(32px,4.2vw,46px); letter-spacing:-.025em; margin:8px 0 14px; } h2 { font-size:28px; margin:0; } h3 { font-size:19px; margin:28px 0 8px; } .lede { max-width:75ch; color:var(--muted); font-size:17px; margin:0; }
+    section { padding-top:48px; scroll-margin-top:16px; } .section-head { border-bottom:2px solid var(--text); display:flex; align-items:baseline; flex-wrap:wrap; gap:12px; padding-bottom:10px; margin-bottom:18px; } .badge { color:var(--blue); background:var(--blue-soft); font:11px var(--mono); padding:2px 8px; border-radius:4px; }
+    .diagram,.table-wrap,.card { border:1px solid var(--line); background:var(--surface); border-radius:10px; } .diagram { padding:16px; overflow:auto; margin:14px 0 6px; } .diagram pre { margin:0; } .caption { color:var(--muted); font-size:13px; margin:5px 0 18px; } .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(270px,1fr)); gap:14px; } .card { padding:14px 16px; } .card h3 { margin:0 0 5px; font-size:16px; } .card p { margin:0; color:var(--muted); }
+    .layers { display:grid; gap:7px; } .layer { display:grid; grid-template-columns:155px minmax(0,1fr); gap:14px; border:1px solid var(--line); border-radius:8px; background:var(--surface); padding:11px 14px; } .layer strong { font:13px var(--mono); color:var(--blue); } .layer span { color:var(--muted); }
+    .callout { border-left:3px solid var(--blue); background:var(--blue-soft); border-radius:0 8px 8px 0; padding:11px 14px; margin:15px 0; max-width:80ch; } .callout strong { display:block; color:var(--blue); font:11px var(--mono); letter-spacing:.06em; text-transform:uppercase; }
+    .table-wrap { overflow:auto; margin:13px 0; } table { border-collapse:collapse; width:100%; font-size:14px; } th,td { padding:10px 12px; text-align:left; vertical-align:top; border-bottom:1px solid var(--line); } th { background:var(--code); color:var(--muted); font:11px var(--mono); letter-spacing:.06em; text-transform:uppercase; } tr:last-child td { border-bottom:0; } code { font:12px var(--mono); background:var(--code); padding:1px 5px; border-radius:4px; overflow-wrap:anywhere; } ul { padding-left:20px; } li { margin:4px 0; } .steps { counter-reset:step; list-style:none; padding:0; display:grid; gap:8px; } .steps li { counter-increment:step; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:10px 14px 10px 48px; position:relative; } .steps li::before { content:counter(step); position:absolute; left:14px; top:11px; color:var(--blue); font:14px var(--mono); }
+    footer { color:var(--muted); border-top:1px solid var(--line); margin-top:48px; padding-top:18px; font-size:13px; }
+    @media (max-width:900px) { .shell { grid-template-columns:1fr; gap:0; } nav { display:none; } .layer { grid-template-columns:1fr; gap:3px; } }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <nav aria-label="Architecture sections">
+      <p>Slate API · design</p>
+      <a href="#context">HLD / context</a>
+      <a href="#layers">Layers and dependencies</a>
+      <a href="#recording">Recording pipeline</a>
+      <a href="#states">Meeting state</a>
+      <a href="#data">Data and storage</a>
+      <a href="#reliability">Reliability and privacy</a>
+      <a href="#api">API map</a>
+      <a href="#code">Code map</a>
+    </nav>
+    <main>
+      <header>
+        <div class="eyebrow">Slate API · FastAPI · PostgreSQL</div>
+        <h1>Architecture and processing design</h1>
+        <p class="lede">Slate is a notepad-first meeting companion. The client records audio in resilient chunks while a user writes timestamped notes; after recording ends, a background pipeline transcribes the complete recording, suggests speakers, and creates evidence-grounded notes.</p>
+      </header>
+
+      <section id="context">
+        <div class="section-head"><h2>High-level design</h2><span class="badge">System context</span></div>
+        <p>Large audio bypasses the API server. The API issues a signed storage URL; the client uploads each chunk directly, then confirms it. Slow provider work is queued in PostgreSQL and performed by a worker.</p>
+        <div class="diagram"><pre class="mermaid">
+flowchart LR
+  Client["Mobile or web client"]
+  subgraph Service["Slate API service"]
+    API["FastAPI routes"]
+    Worker["Job worker"]
+  end
+  DB[("PostgreSQL\napplication data + job queue")]
+  Storage[("Object storage\naudio chunks + optional playback copy")]
+  STT["Speech-to-text provider"]
+  LLM["LLM provider"]
+
+  Client -->|"HTTPS + bearer token"| API
+  Client -->|"signed direct upload"| Storage
+  API --> DB
+  API -->|"signed upload URL"| Storage
+  Worker -->|"claim queued jobs"| DB
+  Worker -->|"download / delete audio"| Storage
+  Worker -->|"diarized transcription"| STT
+  Worker -->|"speaker suggestions + notes"| LLM
+        </pre></div>
+        <p class="caption">The API and worker can run in one process for small deployments or separately from the same application image.</p>
+      </section>
+
+      <section id="layers">
+        <div class="section-head"><h2>Ports-and-adapters architecture</h2><span class="badge">Dependencies point inward</span></div>
+        <div class="layers">
+          <div class="layer"><strong>app/api</strong><span>Thin FastAPI routes, request/response schemas, authentication dependencies, error translation, and request logging.</span></div>
+          <div class="layer"><strong>app/services</strong><span>Use cases: meetings, uploads, notes, transcription, speakers, enhancement, search, sharing, audio retention, and privacy.</span></div>
+          <div class="layer"><strong>app/jobs</strong><span>PostgreSQL-backed queue runner, retry/backoff policy, stale-lock recovery, and one handler per pipeline stage.</span></div>
+          <div class="layer"><strong>app/ports</strong><span>Protocols for repositories, unit of work, storage, audio assembly, speech-to-text, language model, authentication, and rate limiting.</span></div>
+          <div class="layer"><strong>app/domain</strong><span>Framework-independent entities, value objects, enums, vocabulary helpers, and domain errors.</span></div>
+          <div class="layer"><strong>app/adapters</strong><span>Concrete SQLAlchemy, Supabase, ffmpeg, STT, LLM, authentication, and in-memory implementations.</span></div>
+          <div class="layer"><strong>app/container.py</strong><span>The composition root: picks adapters from settings and injects them into routes and jobs.</span></div>
+        </div>
+        <div class="diagram"><pre class="mermaid">
+flowchart TB
+  Routes["API routes"] --> Services["Services"]
+  Jobs["Job runner + handlers"] --> Services
+  Services --> Domain["Domain"]
+  Services --> Ports["Ports / Protocols"]
+  Adapters["Adapters"] -. "implement" .-> Ports
+  Container["Composition root"] --> Adapters
+  Container --> Ports
+        </pre></div>
+      </section>
+
+      <section id="recording">
+        <div class="section-head"><h2>Recording and processing sequence</h2><span class="badge">Deferred pipeline</span></div>
+        <div class="callout"><strong>Important behavior</strong>Uploading or confirming a chunk does not transcribe it. The pipeline starts only when the client calls <code>POST /meetings/{meeting_id}/finish</code>, at which point every uploaded chunk is assembled and transcribed together.</div>
+        <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant C as Client
+  participant A as Slate API
+  participant O as Object storage
+  participant D as PostgreSQL
+  participant W as Job worker
+  participant F as FFmpeg
+  participant S as STT provider
+  participant L as LLM provider
+
+  loop Each audio chunk while recording
+    C->>A: Register chunk (sequence, MIME type, size)
+    A->>D: Save pending chunk metadata
+    A-->>C: Signed upload URL
+    C->>O: Upload chunk directly
+    C->>A: Confirm chunk uploaded
+    A->>D: Mark chunk uploaded
+  end
+  Note over C,W: No transcription or analysis is triggered here.
+  C->>A: Finish recording
+  A->>D: Set processing; enqueue transcribe job
+  A-->>C: 202 Accepted
+  W->>D: Claim job; read all uploaded chunks
+  W->>O: Download all chunks
+  W->>F: Concatenate and normalize audio
+  W->>S: Transcribe assembled audio with diarization
+  S-->>W: Transcript segments and languages
+  W->>D: Save transcript; enqueue speakers job
+  W->>L: Suggest speaker names
+  W->>D: Save speakers; enqueue enhancement job
+  W->>L: Create grounded enhanced notes
+  W->>D: Save notes; meeting ready
+  W->>O: Delete source chunks (keep an optional expiring playback copy)
+        </pre></div>
+        <ol class="steps">
+          <li><strong>Capture:</strong> chunks are individually retryable, with a unique sequence number per meeting.</li>
+          <li><strong>Finalize:</strong> finish atomically moves the meeting to processing and queues transcription.</li>
+          <li><strong>Transcribe:</strong> the worker concatenates all confirmed chunks before making one STT request.</li>
+          <li><strong>Enrich:</strong> speaker naming precedes note enhancement; speaker failure does not prevent notes.</li>
+          <li><strong>Retain or delete:</strong> source chunks are deleted after the transcript is safely persisted; an assembled playback copy is optional and expires.</li>
+        </ol>
+      </section>
+
+      <section id="states">
+        <div class="section-head"><h2>Meeting and job state</h2><span class="badge">Lifecycle</span></div>
+        <div class="diagram"><pre class="mermaid">
+stateDiagram-v2
+  [*] --> draft
+  draft --> recording: first chunk registered
+  recording --> processing: finish with uploaded audio
+  processing --> ready: enhance job succeeds
+  processing --> failed: non-retryable or exhausted job failure
+  ready --> processing: explicit reprocess
+        </pre></div>
+        <div class="grid">
+          <div class="card"><h3>Pipeline order</h3><p><code>transcribe → speakers → enhance</code>. Each completed stage enqueues the next stage; it is not a fan-out workflow.</p></div>
+          <div class="card"><h3>Visible stage</h3><p>The meeting API derives a user-facing stage from the active job: transcribing, identifying speakers, enhancing, ready, or failed.</p></div>
+          <div class="card"><h3>Retries</h3><p>Retryable provider and unexpected errors use bounded exponential backoff. Stale running jobs are reclaimed by the worker.</p></div>
+        </div>
+      </section>
+
+      <section id="data">
+        <div class="section-head"><h2>Data and storage</h2><span class="badge">Persistence</span></div>
+        <div class="diagram"><pre class="mermaid">
+erDiagram
+  FOLDERS ||--o{ MEETINGS : groups
+  MEETINGS ||--o{ NOTE_LINES : contains
+  MEETINGS ||--o{ AUDIO_CHUNKS : receives
+  MEETINGS ||--o{ TRANSCRIPT_SEGMENTS : produces
+  MEETINGS ||--o{ SPEAKERS : identifies
+  MEETINGS ||--|| ENHANCED_NOTES : has
+  MEETINGS ||--o{ JOBS : processes
+  MEETINGS ||--o{ SHARES : exposes
+        </pre></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Store</th><th>What it contains</th><th>Why it matters</th></tr></thead>
+          <tbody>
+            <tr><td>PostgreSQL</td><td>Meetings, notes, chunk metadata, transcript, speakers, enhanced notes, jobs, folders, and shares.</td><td>Transactionally couples meeting status changes and job enqueueing; supports full-text search.</td></tr>
+            <tr><td>Object storage</td><td>Direct-uploaded audio chunks and, when configured, one assembled playback recording.</td><td>Large audio does not pass through the API; source chunks can be removed after successful transcription.</td></tr>
+            <tr><td>Enhanced notes JSON</td><td>Sections, user/AI blocks, cited evidence, action items, decisions, and open questions.</td><td>User-entered lines are preserved verbatim; AI blocks are grounded against transcript timings.</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <section id="reliability">
+        <div class="section-head"><h2>Reliability, security, and privacy</h2><span class="badge">Operational design</span></div>
+        <div class="grid">
+          <div class="card"><h3>Safe concurrency</h3><p>Jobs are claimed through PostgreSQL locking; unique constraints protect chunk sequence numbers and active shares. Finish and enqueue are idempotent.</p></div>
+          <div class="card"><h3>Provider isolation</h3><p>Downloads, audio assembly, STT, and LLM calls run outside database transactions, so the system does not hold row locks while waiting on providers.</p></div>
+          <div class="card"><h3>Ownership checks</h3><p>Service and repository reads are scoped to the authenticated user. Missing and foreign-owned resources are treated alike.</p></div>
+          <div class="card"><h3>Privacy by default</h3><p>Chunks are removed after transcription succeeds. Playback retention is configurable; expired retained recordings are purged by the worker.</p></div>
+          <div class="card"><h3>Grounded AI output</h3><p>Generated notes are validated and post-processed so AI additions reference real transcript evidence while user notes remain unchanged.</p></div>
+          <div class="card"><h3>Graceful degradation</h3><p>If speaker suggestion fails, enhancement continues with generic speaker labels. A failure to retain playback audio does not undo a completed transcript.</p></div>
+        </div>
+      </section>
+
+      <section id="api">
+        <div class="section-head"><h2>API map</h2><span class="badge">Key interactions</span></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Area</th><th>Representative endpoints</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td>Meetings and notes</td><td><code>POST /meetings</code>, <code>GET /meetings/{id}</code>, <code>PUT /meetings/{id}/notes</code></td><td>Create and inspect meetings; persist timestamped user notes.</td></tr>
+            <tr><td>Audio upload</td><td><code>POST /meetings/{id}/chunks</code>, <code>POST /chunks/{id}/uploaded</code>, <code>POST /finish</code></td><td>Register, directly upload, confirm, and finalize resilient audio capture.</td></tr>
+            <tr><td>Processing</td><td><code>POST /catch-up</code>, <code>PUT /speakers/{label}</code>, <code>POST /reprocess</code></td><td>Use a client-provided live transcript for catch-up, confirm speakers, or requeue a stage.</td></tr>
+            <tr><td>Knowledge</td><td><code>GET /search</code>, <code>POST /ask</code></td><td>Search stored notes/transcripts and ask cited questions over them.</td></tr>
+            <tr><td>Sharing and audio</td><td><code>POST /share</code>, <code>GET /s/{token}</code>, <code>GET /audio</code></td><td>Create/revoke a public share and access a signed playback URL when retained.</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <section id="code">
+        <div class="section-head"><h2>Code map</h2><span class="badge">Where to look</span></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Question</th><th>Primary code</th></tr></thead>
+          <tbody>
+            <tr><td>Where is the recording hand-off defined?</td><td><code>app/services/uploads.py</code></td></tr>
+            <tr><td>Where are chunks assembled and sent to STT?</td><td><code>app/services/transcription.py</code> and <code>app/adapters/audio/ffmpeg.py</code></td></tr>
+            <tr><td>Where is stage order enforced?</td><td><code>app/jobs/handlers.py</code></td></tr>
+            <tr><td>Where are retries and job locking handled?</td><td><code>app/jobs/runner.py</code> and <code>app/adapters/db/repositories.py</code></td></tr>
+            <tr><td>Where are application interfaces and data models?</td><td><code>app/ports/</code> and <code>app/domain/models.py</code></td></tr>
+            <tr><td>Where are concrete providers selected?</td><td><code>app/container.py</code> and provider factories in <code>app/adapters/</code></td></tr>
+          </tbody>
+        </table></div>
+      </section>
+      <footer>Architecture reflects the implementation in this repository. Mermaid diagrams load from a CDN when this file is opened in a browser.</footer>
+    </main>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script>mermaid.initialize({ startOnLoad: true, securityLevel: "loose", theme: window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default" });</script>
+</body>
+</html>

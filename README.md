@@ -27,6 +27,97 @@ Patterns in use:
 
 Tests swap in the in-memory fakes from `tests/fakes.py`.
 
+For a fuller, browser-rendered architecture guide with diagrams, see [`app/architecture.html`](app/architecture.html).
+
+## High-level design
+
+```mermaid
+flowchart TB
+    Client[Mobile / web client]
+
+    subgraph API[Slate API]
+        Auth[Authentication middleware]
+        Routes[FastAPI routes]
+        Services[Application services]
+        Queue[Postgres-backed job queue]
+        Worker[Job worker]
+    end
+
+    subgraph Core[Domain and ports]
+        Domain[Domain models and rules]
+        Ports[Repository, storage, STT, LLM, and audio ports]
+    end
+
+    subgraph Infrastructure[Adapters]
+        DB[(Postgres)]
+        Storage[Object storage]
+        Audio[FFmpeg audio assembler]
+        STT[Deepgram or Groq STT]
+        LLM[Anthropic or OpenAI-compatible LLM]
+    end
+
+    Client -->|HTTPS| Auth --> Routes --> Services
+    Services --> Domain
+    Services --> Ports
+    Services --> Queue
+    Queue --> Worker
+    Worker --> Services
+    Ports --> DB
+    Ports --> Storage
+    Ports --> Audio
+    Ports --> STT
+    Ports --> LLM
+```
+
+## Recording and processing sequence
+
+Audio chunks are uploaded during recording, but they are not transcribed individually. Processing begins only after
+the client calls `POST /meetings/{meeting_id}/finish`; the worker then assembles every uploaded chunk and executes
+the transcription, speaker, and enhancement stages in order.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant A as Slate API
+    participant S as Object storage
+    participant D as Postgres
+    participant W as Job worker
+    participant F as FFmpeg
+    participant T as Speech-to-text provider
+    participant L as LLM provider
+
+    loop While recording, for each audio chunk
+        C->>A: POST /meetings/{id}/chunks
+        A->>D: Create pending chunk record
+        A-->>C: Signed upload URL
+        C->>S: Upload chunk directly
+        C->>A: POST /chunks/{chunkId}/uploaded
+        A->>D: Mark chunk uploaded
+    end
+
+    Note over C,W: No transcription or analysis is queued during recording.
+    C->>A: POST /meetings/{id}/finish
+    A->>D: Set meeting to processing; enqueue transcribe job
+    A-->>C: 202 Accepted
+
+    W->>D: Claim transcribe job and list uploaded chunks
+    W->>S: Download all uploaded chunks
+    W->>F: Concatenate and normalize audio
+    W->>T: Transcribe assembled recording with diarization
+    T-->>W: Transcript segments and detected languages
+    W->>D: Persist transcript; enqueue speaker job
+    W->>S: Delete source chunks
+
+    W->>D: Claim speaker job
+    W->>L: Suggest speaker names from transcript and attendees
+    W->>D: Persist suggestions; enqueue enhance job
+
+    W->>D: Claim enhance job
+    W->>L: Generate grounded enhanced notes
+    W->>D: Persist enhanced notes; meeting becomes ready
+```
+
 ## Run locally
 
 ```bash
