@@ -22,6 +22,7 @@ from fastapi.responses import HTMLResponse
 
 from app.api.deps import ContainerDep
 from app.domain.errors import NotFoundError
+from app.presentation import BRAND_HEADER, PAGE_CSS
 
 router = APIRouter(tags=["auth"])
 
@@ -65,7 +66,10 @@ async def auth_return(
         message = "Sign-in failed. Close this tab and try again in Slate."
     else:
         message = "You're signed in. Close this tab to go back to Slate." if handoff else "You're signed in."
-    return HTMLResponse(_page(target, message), headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+    return HTMLResponse(
+        _page(target, message, failed=bool(error)),
+        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+    )
 
 
 @router.get("/auth/handoff/{handoff_id}", include_in_schema=False)
@@ -81,20 +85,23 @@ def _script_string(value: str) -> str:
     return json.dumps(value).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
 
 
-def _page(target: str | None, message: str) -> str:
+def _page(target: str | None, message: str, *, failed: bool = False) -> str:
     button = (
         f'<a class="btn" href="{html.escape(target, quote=True)}">Return to Slate</a>'
         f"<script>location.replace({_script_string(target)});</script>"
         if target
         else ""
     )
+    failed = failed or target is None
+    heading = "Let's try that again" if failed else "You're all set."
+    symbol = "!" if failed else "✓"
+    hint = (
+        "Open Slate to try signing in again." if failed else "You can safely close this tab once you're back in Slate."
+    )
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Slate</title>
-<style>
-body{{margin:0;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
-gap:20px;padding:24px;background:#F6F4EF;color:#1F1E1B;font:16px/1.5 system-ui,sans-serif;text-align:center}}
-h1{{font:400 30px Georgia,serif;margin:0}}
-.btn{{display:inline-block;padding:14px 28px;border-radius:999px;background:#1F1E1B;color:#F6F4EF;
-text-decoration:none;font-weight:600}}
-@media (prefers-color-scheme:dark){{body{{background:#151513;color:#ECEAE4}}.btn{{background:#ECEAE4;color:#151513}}}}
-</style></head><body><h1>Slate</h1><p>{html.escape(message)}</p>{button}</body></html>"""
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow"><title>Sign in · Slate</title>
+<style>{PAGE_CSS}</style></head><body class="status-page">{BRAND_HEADER}<main>
+<div class="status-symbol" aria-hidden="true">{symbol}</div><div class="eyebrow">Slate sign-in</div>
+<h1>{heading}</h1><p class="message">{html.escape(message)}</p>{button}
+<p class="hint">{hint}</p></main></body></html>"""

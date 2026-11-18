@@ -21,6 +21,7 @@ import structlog
 from app.domain.errors import NotFoundError
 from app.domain.models import EnhancedNotes, Evidence, Meeting, Share, TranscriptSegment
 from app.ports.repositories import UnitOfWorkFactory
+from app.presentation import BRAND_HEADER, PAGE_CSS
 from app.services.meetings import MeetingDetail, load_detail, require_meeting
 
 log = structlog.get_logger(__name__)
@@ -194,43 +195,32 @@ def _list_html(entries: Iterable[str]) -> str:
     return "<ul>" + "".join(f"<li>{_e(x)}</li>" for x in entries) + "</ul>"
 
 
-_CSS = """
-*{box-sizing:border-box}
-body{margin:0;background:#fff;color:#1a1a1a;font:17px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,
-"Helvetica Neue",Arial,sans-serif;-webkit-text-size-adjust:100%}
-main{max-width:720px;margin:0 auto;padding:32px 20px 64px}
-h1{font-size:28px;line-height:1.25;margin:0 0 4px}
-h2{font-size:19px;margin:32px 0 8px}
-.date,.t,footer{color:#6b6b6b}
-.date{margin:0 0 24px;font-size:15px}
-.tldr{background:#f5f5f4;border-radius:10px;padding:14px 16px;margin:0}
-ul{padding-left:22px;margin:0}
-li{margin:6px 0;overflow-wrap:anywhere}
-li.ai{list-style:none;margin-left:-18px}
-.mark{color:#7a5af5;display:inline-block;width:18px}
-.t{font-size:13px;font-variant-numeric:tabular-nums;white-space:nowrap}
-.who{font-weight:600}
-.seg{margin:10px 0}
-footer{margin-top:48px;font-size:13px}
-"""
-
-
-def _page(title: str, body: str) -> str:
+def _page(title: str, body: str, *, status: bool = False) -> str:
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
-<title>{_e(title)}</title><style>{_CSS}</style></head><body><main>{body}</main></body></html>"""
+<title>{_e(title)} · Slate</title><style>{PAGE_CSS}</style></head>
+<body class="{"status-page" if status else "notes-page"}">{BRAND_HEADER}<main>{body}</main></body></html>"""
 
 
 def to_html(detail: MeetingDetail, *, include_transcript: bool = False) -> str:
     meeting, notes = detail.meeting, detail.enhanced
-    parts: list[str] = [f"<h1>{_e(meeting.title)}</h1>", f'<p class="date">{_e(_date(meeting))}</p>']
+    parts: list[str] = [
+        '<div class="eyebrow">Shared meeting notes</div>',
+        f"<h1>{_e(meeting.title)}</h1>",
+        f'<p class="date">{_e(_date(meeting))} &nbsp; / &nbsp; Read-only</p>',
+    ]
     if notes is None:
         lines = [n.text for n in detail.notes if n.text.strip()]
         if lines:
             parts.append("<h2>Notes</h2>" + _list_html(lines))
+        else:
+            parts.append('<p class="empty">No notes have been added to this meeting yet.</p>')
     else:
         if notes.tldr.strip():
-            parts.append(f'<p class="tldr">{_e(notes.tldr.strip())}</p>')
+            parts.append(
+                '<section class="summary-card" aria-label="Meeting summary"><h2>At a glance</h2>'
+                f'<p class="tldr">{_e(notes.tldr.strip())}</p></section>'
+            )
         for section in notes.sections:
             items = []
             for block in section.blocks:
@@ -258,16 +248,24 @@ def to_html(detail: MeetingDetail, *, include_transcript: bool = False) -> str:
             f'<span class="t">{_e(format_ms(seg.start_ms))}</span><br>{_e(seg.text)}</p>'
             for seg in detail.transcript
         )
-        parts.append(f"<h2>Transcript</h2>{segments}")
-    parts.append(f"<footer>{AI_MARK} marks lines written by AI from the recording. Shared from Slate.</footer>")
+        parts.append(
+            '<details class="transcript"><summary>Transcript'
+            '<span class="hint">Read the conversation, with speakers and timestamps</span></summary>'
+            f"{segments}</details>"
+        )
+    parts.append(f"<footer>{AI_MARK} marks lines written by AI from the recording.<br>Shared from Slate.</footer>")
     return _page(meeting.title, "".join(parts))
 
 
 def not_found_html() -> str:
     return _page(
         "Link not available",
+        '<div class="status-symbol" aria-hidden="true">↗</div>'
+        '<div class="eyebrow">Shared notes</div>'
         "<h1>This link isn't available</h1>"
-        '<p class="date">It may have expired, or the person who shared it turned it off.</p>',
+        '<p class="message">It may have expired, or the person who shared it turned it off.</p>'
+        '<p class="hint">Ask the person who shared it for a new link.</p>',
+        status=True,
     )
 
 
