@@ -128,4 +128,6 @@ make check                    # lint + typecheck + tests
 TEST_DATABASE_URL=postgresql+asyncpg://slate:slate@localhost:5432/slate make test   # include DB tests
 ```
 
+The database tests drop and recreate the schema, so set `TEST_DATABASE_URL` to a disposable database.
+
 API docs are served at `/docs`.
